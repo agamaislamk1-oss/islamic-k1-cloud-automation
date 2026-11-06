@@ -287,13 +287,16 @@ Kembalikan output dalam JSON murni dengan struktur persis:
     from google import genai
     from google.genai import types
 
-    client = genai.Client(api_key=gemini_api_key)
+    client = genai.Client(
+        api_key=gemini_api_key,
+        http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)),
+    )
     data = None
     candidate_models = [
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-flash-latest",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
     ]
     for model_name in candidate_models:
         try:
@@ -310,11 +313,50 @@ Kembalikan output dalam JSON murni dengan struktur persis:
             print(f"[AI] Berhasil menyusun metadata dengan model {model_name}!")
             break
         except Exception as e:
-            print(f"[AI] Model {model_name} sibuk ({e}), mencoba model berikutnya...")
-            time.sleep(2)
+            print(f"[AI] Model {model_name} sibuk ({str(e)[:100]}), mencoba model berikutnya...")
+            time.sleep(1)
 
     if not data:
-        print("[AI] Menggunakan generator metadata cadangan karena semua model Gemini sedang penuh...")
+        try:
+            import urllib.request
+
+            print("[AI] Menyusun metadata & terjemahan 10 bahasa via Free AI Cloud...")
+            poll_payload = {
+                "model": "openai",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are an expert Indonesian Islamic YouTube SEO strategist. Always respond with valid JSON matching the requested schema.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.3,
+            }
+            req = urllib.request.Request(
+                "https://text.pollinations.ai/openai",
+                data=json.dumps(poll_payload).encode("utf-8"),
+                headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+            )
+            resp_raw = urllib.request.urlopen(req, timeout=60).read().decode("utf-8")
+            resp_obj = json.loads(resp_raw)
+            content_str = (
+                resp_obj.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+            )
+            content_str = re.sub(r"^```(?:json)?\s*", "", content_str)
+            content_str = re.sub(r"\s*```$", "", content_str)
+            parsed_poll = json.loads(content_str)
+            if parsed_poll.get("title"):
+                data = parsed_poll
+                print("[AI] Berhasil menyusun metadata & terjemahan 10 bahasa via Free AI Cloud!")
+        except Exception as poll_err:
+            print(f"[AI] Free AI Cloud sibuk ({str(poll_err)[:100]}), beralih ke generator cadangan...")
+
+    if not data:
+        print("[AI] Menggunakan generator metadata cadangan karena semua model sedang penuh...")
         data = build_fallback_metadata(original_filename, trimmed_duration, transcript_segments)
 
     data["transcript_segments"] = transcript_segments

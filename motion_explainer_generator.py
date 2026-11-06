@@ -126,6 +126,248 @@ def build_fallback_explainer_data(topic_title: str, target_audience: str, catego
     clean_topic = topic_title.strip()
     clean_audience = (target_audience or "Keluarga Muslim").strip()
 
+    if "pesawat" in clean_topic.lower() and "terbang" in clean_topic.lower():
+        scenes = [
+            {
+                "scene_number": 1,
+                "chapter_title": "Keajaiban Pesawat Besi yang Bisa Terbang",
+                "narration_text": (
+                    f"Assalamu'alaikum warahmatullahi wabarakatuh. Alhamdulillahi rabbil 'alamin, apa kabar adik-adik dan {clean_audience} "
+                    f"yang dirahmati Allah? Pernahkah kalian menatap langit dan bertanya, bagaimana pesawat terbang yang terbuat dari besi "
+                    f"seberat ratusan ton bisa melayang tinggi di udara tanpa jatuh? Yuk kita pelajari rahasia sains dan tanda kebesaran Allah bersama channel Islamic K1!"
+                ),
+                "headline": "BAGAIMANA PESAWAT BISA TERBANG?",
+                "bullet_points": [
+                    "Pesawat besi ratusan ton melayang tinggi di angkasa",
+                    "Perpaduan hukum sains fisika dan ketetapan Allah",
+                    "Inspirasi dari cara burung mengepakkan sayapnya",
+                ],
+                "highlight_box": "Tidakkah mereka memperhatikan burung-burung yang dimudahkan terbang di angkasa bebas? Tidak ada yang menahannya selain Allah. (QS. An-Nahl: 79)",
+                "theme": "deep_ocean",
+                "icon_type": "plane",
+            },
+            {
+                "scene_number": 2,
+                "chapter_title": "Inspirasi dari Burung di Angkasa (QS. Al-Mulk: 19)",
+                "narration_text": (
+                    "Sejak ratusan tahun lalu, para ilmuwan termasuk ilmuwan Muslim seperti Abbas Ibnu Firnas memperhatikan bagaimana burung terbang di langit. "
+                    "Allah Subhanahu wa Ta'ala berfirman dalam Qur'an Surat Al-Mulk ayat sembilan belas tentang burung yang mengembangkan dan melipat sayapnya. "
+                    "Dari bentuk sayap burung itulah manusia menemukan ilmu aerodinamika untuk membuat sayap pesawat terbang!"
+                ),
+                "headline": "INSPIRASI DARI SAYAP BURUNG",
+                "bullet_points": [
+                    "Mengamati burung yang membentangkan sayap di langit",
+                    "Abbas Ibnu Firnas: pelopor percobaan terbang Muslim",
+                    "Melahirkan ilmu aerodinamika modern pada sayap pesawat",
+                ],
+                "highlight_box": "Dan apakah mereka tidak memperhatikan burung-burung yang mengembangkan dan mengatupkan sayapnya di atas mereka? (QS. Al-Mulk: 19)",
+                "theme": "emerald_gold",
+                "icon_type": "book",
+            },
+            {
+                "scene_number": 3,
+                "chapter_title": "Empat Gaya Utama yang Bekerja pada Pesawat",
+                "narration_text": (
+                    "Adik-adik sekalian, agar sebuah pesawat bisa terbang dengan stabil di udara, ada empat gaya fisika yang bekerja secara bersamaan. "
+                    "Pertama adalah gaya dorong atau Thrust ke depan, kedua gaya angkat atau Lift ke atas, "
+                    "ketiga gaya berat atau gravitasi ke bawah, dan keempat gaya hambat udara atau Drag ke belakang."
+                ),
+                "headline": "4 GAYA FISIKA PENERBANGAN",
+                "bullet_points": [
+                    "1. Gaya Angkat (Lift) yang mengangkat pesawat ke atas",
+                    "2. Gaya Dorong (Thrust) dari mesin jet yang super kuat",
+                    "3. Mengimbangi Gravitasi (Weight) dan Hambat Udara (Drag)",
+                ],
+                "highlight_box": "Pesawat bisa naik ke langit ketika Gaya Angkat (Lift) lebih besar daripada Gaya Berat (Gravitasi).",
+                "theme": "royal_teal",
+                "icon_type": "lightbulb",
+            },
+            {
+                "scene_number": 4,
+                "chapter_title": "Rahasia Bentuk Sayap Pesawat (Hukum Bernoulli)",
+                "narration_text": (
+                    "Lalu bagaimana sayap pesawat yang diam tidak mengepak seperti burung bisa mengangkat badan pesawat? "
+                    "Rahasianya ada pada bentuk melengkung sayap yang disebut Airfoil dan Hukum Bernoulli! "
+                    "Bagian atas sayap dibuat melengkung sedangkan bagian bawahnya lebih datar, sehingga udara di atas sayap mengalir jauh lebih cepat."
+                ),
+                "headline": "RAHASIA SAYAP & HUKUM BERNOULLI",
+                "bullet_points": [
+                    "Bentuk sayap melengkung khusus bernama Airfoil",
+                    "Udara di atas sayap bergerak cepat (tekanan rendah)",
+                    "Udara di bawah sayap mendorong kuat pesawat ke atas!",
+                ],
+                "highlight_box": "Perbedaan tekanan udara di bawah dan di atas sayap menghasilkan Gaya Angkat raksasa!",
+                "theme": "midnight_amber",
+                "icon_type": "plane",
+            },
+            {
+                "scene_number": 5,
+                "chapter_title": "Kekuatan Mesin Jet & Baling-Baling (Gaya Dorong)",
+                "narration_text": (
+                    "Namun sayap tidak akan bisa menghasilkan gaya angkat jika pesawat hanya diam di tempat. "
+                    "Di sinilah peran mesin jet atau baling-baling raksasa di bawah sayap pesawat! "
+                    "Mesin jet menghisap udara dari depan, memampatkannya, lalu menyemburkannya ke belakang dengan kecepatan tinggi sehingga pesawat melesat maju."
+                ),
+                "headline": "TENAGA MESIN JET PENDORONG",
+                "bullet_points": [
+                    "Menghisap udara dan menyemburkan tenaga dorong kuat",
+                    "Membuat pesawat berlari hingga 250 km/jam di landasan",
+                    "Aliran udara cepat di sayap mulai mengangkat pesawat",
+                ],
+                "highlight_box": "Kombinasi dorongan mesin jet dan lengkungan sayap membuat pesawat lepas landas dengan mulus.",
+                "theme": "warm_emerald",
+                "icon_type": "plane",
+            },
+            {
+                "scene_number": 6,
+                "chapter_title": "Bagaimana Pilot Mengemudikan Pesawat di Udara?",
+                "narration_text": (
+                    "Saat sudah berada di atas awan, bagaimana Bapak atau Ibu Pilot membelokkan pesawat ke kanan, ke kiri, naik, atau turun? "
+                    "Di ujung sayap dan ekor pesawat terdapat sirip-sirip kecil yang bisa bergerak, yaitu Aileron untuk berbelok, "
+                    "Elevator di ekor untuk menanjak atau menurun, serta Rudder untuk menjaga arah pesawat tetap lurus."
+                ),
+                "headline": "KEMUDI SAYAP & EKOR PESAWAT",
+                "bullet_points": [
+                    "Aileron di sayap untuk memiringkan dan membelokkan pesawat",
+                    "Elevator di ekor untuk mengatur pesawat naik dan turun",
+                    "Rudder tegak di ekor menjaga keseimbangan arah terbang",
+                ],
+                "highlight_box": "Teknologi kemudi canggih membantu pilot menjaga keselamatan ratusan penumpang di udara.",
+                "theme": "deep_ocean",
+                "icon_type": "shield",
+            },
+            {
+                "scene_number": 7,
+                "chapter_title": "Kenapa Pesawat Terbang Tinggi di Atas Awan?",
+                "narration_text": (
+                    "Adik-adik mungkin sering melihat pesawat terbang sangat tinggi hingga menembus di atas awan, sekitar sepuluh kilometer dari permukaan bumi. "
+                    "Mengapa demikian? Karena di ketinggian tersebut udara lebih tipis sehingga hambatan angin berkurang, "
+                    "pesawat lebih hemat bahan bakar, dan terhindar dari cuaca buruk atau awan hujan di bawahnya."
+                ),
+                "headline": "TERBANG DI ATAS AWAN (10 KM)",
+                "bullet_points": [
+                    "Udara di ketinggian 10 km lebih tenang dan stabil",
+                    "Hambatan udara kecil sehingga hemat bahan bakar",
+                    "Kabin pesawat diberi tekanan udara agar penumpang nyaman",
+                ],
+                "highlight_box": "Di balik kecanggihan kabin pesawat, ada ilmu fisika dan rekayasa teknologi yang luar biasa.",
+                "theme": "emerald_gold",
+                "icon_type": "lightbulb",
+            },
+            {
+                "scene_number": 8,
+                "chapter_title": "Tokoh Kebanggaan Indonesia: B.J. Habibie",
+                "narration_text": (
+                    "Tahukah adik-adik bahwa bangsa Indonesia memiliki ilmuwan pesawat terbang kelas dunia yang sangat saleh dan jenius? "
+                    "Beliau adalah Bapak Bacharuddin Jusuf Habibie, Presiden ketiga Republik Indonesia yang dijuluki Mr. Crack! "
+                    "Beliau menemukan rumus ketahanan keretakan sayap pesawat yang dipakai oleh seluruh maskapai penerbangan di dunia hingga hari ini."
+                ),
+                "headline": "TELADAN ILMUWAN: B.J. HABIBIE",
+                "bullet_points": [
+                    "Penemu teori Faktor Habibie untuk keamanan sayap pesawat",
+                    "Perancang pesawat karya anak bangsa N-250 Gatotkaca",
+                    "Memadukan kecerdasan sains dengan iman dan takwa",
+                ],
+                "highlight_box": "Jadilah anak Muslim yang unggul dalam iman dan takwa (IMTAK) serta ilmu pengetahuan dan teknologi (IPTEK).",
+                "theme": "royal_teal",
+                "icon_type": "heart",
+            },
+            {
+                "scene_number": 9,
+                "chapter_title": "Adab & Doa Naik Kendaraan Sesuai Sunnah",
+                "narration_text": (
+                    "Sehebat apa pun mesin pesawat terbang, keselamatan kita tetap berada dalam penjagaan Allah Subhanahu wa Ta'ala. "
+                    "Oleh karena itu, Rasulullah shallallahu 'alaihi wa sallam mengajarkan kita untuk selalu membaca doa naik kendaraan: "
+                    "Subhanalladzi sakhkhara lana hadza wama kunna lahu muqrinin, wa inna ila rabbina lamunqalibun."
+                ),
+                "headline": "ADAB & DOA NAIK PESAWAT",
+                "bullet_points": [
+                    "Membaca Bismillah dan doa naik kendaraan (QS. Az-Zukhruf: 13)",
+                    "Bersyukur atas nikmat ilmu yang memudahkan perjalanan",
+                    "Menjaga adab, ketertiban, dan dzikir selama di perjalanan",
+                ],
+                "highlight_box": "Maha Suci Allah yang telah menundukkan semua ini bagi kami padahal sebelumnya kami tidak mampu menguasainya. (QS. Az-Zukhruf: 13)",
+                "theme": "midnight_amber",
+                "icon_type": "mosque",
+            },
+            {
+                "scene_number": 10,
+                "chapter_title": "Kesimpulan, Ajakan Belajar Sains & Penutup",
+                "narration_text": (
+                    "Nah adik-adik, sekarang kita sudah tahu bahwa pesawat bisa terbang berkat bentuk sayap Airfoil, gaya angkat Bernoulli, "
+                    "dorongan mesin jet, serta hukum alam ciptaan Allah! Teruslah rajin belajar sains dan Al-Qur'an agar kelak kalian menjadi ilmuwan Muslim kebanggaan umat. "
+                    "Jangan lupa klik tombol Subscribe, Like, dan bagikan video channel Islamic K1 ini ya. Wassalamu'alaikum warahmatullahi wabarakatuh."
+                ),
+                "headline": "SUBSCRIBE CHANNEL ISLAMIC K1",
+                "bullet_points": [
+                    "Klik SUBSCRIBE untuk video sains & edukasi Islami terbaru",
+                    "Tekan LIKE dan bagikan ilmu bermanfaat ini ke teman-teman",
+                    "Rajin belajar sains dan Al-Qur'an sejak usia dini!",
+                ],
+                "highlight_box": "Mari dukung channel edukasi keluarga Muslim Islamic K1 (@islamick1832)!",
+                "theme": "emerald_gold",
+                "icon_type": "plane",
+            },
+        ]
+        return {
+            "title": "Bagaimana Pesawat Bisa Terbang? ✈️ Rahasia Sains & Keajaiban Ciptaan Allah untuk Anak",
+            "thumbnail_hook": "BAGAIMANA PESAWAT BISA TERBANG?",
+            "thumbnail_badge": f"SAINS & IMAN • {clean_audience.upper()[:16]}",
+            "category": "Islami & Sains Anak",
+            "voice_gender": "male",
+            "description_paragraphs": [
+                (
+                    "Assalamu'alaikum Warahmatullahi Wabarakatuh.\n"
+                    "Pernahkah adik-adik dan sahabat keluarga Muslim bertanya, bagaimana pesawat terbang yang terbuat dari logam berat bisa melayang tinggi di atas awan? "
+                    "Dalam video animasi Remotion 3 menit dari channel Islamic K1 ini, kita mengupas rahasia sains aerodinamika secara seru dan mudah dipahami untuk anak!"
+                ),
+                (
+                    "Kita akan belajar bersama tentang 4 gaya penerbangan (Gaya Angkat/Lift, Gaya Dorong/Thrust, Gravitasi, dan Hambatan Udara), "
+                    "rahasia bentuk sayap Airfoil (Hukum Bernoulli), teladan ilmuwan dirgantara Muslim B.J. Habibie, hingga renungan ayat Al-Qur'an (QS. An-Nahl: 79 & QS. Al-Mulk: 19) "
+                    "serta doa naik kendaraan sesuai sunnah Rasulullah SAW."
+                ),
+                (
+                    "Semoga video edukasi sains dan iman ini menambah rasa syukur serta semangat belajar adik-adik semua. "
+                    "Jangan lupa klik tombol Subscribe, Like, dan bagikan video channel Islamic K1 ini kepada keluarga dan sahabat lainnya.\n"
+                    "Wassalamu'alaikum Warahmatullahi Wabarakatuh."
+                ),
+            ],
+            "hashtags": [
+                "#IslamicK1",
+                "#BagaimanaPesawatBisaTerbang",
+                "#SainsAnakMuslim",
+                "#EdukasiAnakIslami",
+                "#RemotionAnimation",
+                "#KeluargaMuslim",
+            ],
+            "tags": [
+                "Islamic K1",
+                "Bagaimana pesawat bisa terbang",
+                "Sains untuk anak Muslim",
+                "Cara kerja pesawat terbang",
+                "Hukum Bernoulli anak",
+                "Edukasi Islami Anak",
+                "Animasi Remotion Edukasi",
+            ],
+            "playlist_name": "Explainer Islami & Edukasi Keluarga Muslim",
+            "recommended_publish_slot": "SIANG",
+            "scenes": scenes,
+            "localizations": {
+                "en": {
+                    "title": "How Do Airplanes Fly? ✈️ Fun Science & Islamic Wisdom for Kids | Islamic K1",
+                    "description": "Discover the science of aerodynamics, Bernoulli's principle, jet engines, and Quranic reflections (Surah An-Nahl: 79 & Al-Mulk: 19) on how airplanes fly in this 3-minute animated explainer for children.",
+                },
+                "ar": {
+                    "title": "كيف تطير الطائرة؟ ✈️ أسرار العلوم وآيات الله في الكون للأطفال | Islamic K1",
+                    "description": "تعرف على كيفية طيران الطائرات، وقوة الرفع والدفع، والتأمل في آيات الله في سورة النحل وسورة الملك في هذا الفيديو التعليمي الممتع للأطفال.",
+                },
+                "ms": {
+                    "title": "Bagaimana Kapal Terbang Boleh Terbang? ✈️ Sains & Hikmah Islam untuk Kanak-Kanak",
+                    "description": "Pelajari rahsia aerodinamik, sayap pesawat, enjin jet, dan tadabbur Al-Quran tentang bagaimana kapal terbang boleh terbang di udara.",
+                },
+            },
+        }
+
     scenes = [
         {
             "scene_number": 1,
@@ -464,13 +706,15 @@ Kembalikan HANYA JSON murni yang valid dengan struktur berikut:
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=gemini_api_key)
+        client = genai.Client(
+            api_key=gemini_api_key,
+            http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)),
+        )
         candidate_models = [
             "gemini-3.6-flash",
+            "gemini-3.5-flash",
             "gemini-3.5-flash-lite",
             "gemini-3.1-flash-lite",
-            "gemini-flash-lite-latest",
-            "gemini-3.8-flash",
         ]
 
         for model_name in candidate_models:
@@ -494,9 +738,52 @@ Kembalikan HANYA JSON murni yang valid dengan struktur berikut:
                     break
             except Exception as e:
                 print(f"[PERINGATAN] Model {model_name} melewati batas/gangguan ({str(e)[:110]}), mencoba model cadangan...")
-                time.sleep(2)
+                time.sleep(1)
     except Exception as sdk_err:
-        print(f"[PERINGATAN] Gagal menginisialisasi SDK Gemini ({sdk_err}), beralih ke generator cadangan...")
+        print(f"[PERINGATAN] Gagal menginisialisasi SDK Gemini ({sdk_err}), beralih ke generator AI Cloud gratis...")
+
+    # Cadangan AI LLM 100% Gratis (Pollinations OpenAI JSON Endpoint) jika kuota/server Gemini sedang sibuk (503/429)
+    if data is None:
+        for poll_attempt in range(2):
+            try:
+                import urllib.request
+
+                print(f"[AI EXPLAINER] Menyusun Script 10 Scene spesifik topik via Free AI Cloud (percobaan #{poll_attempt + 1})...")
+                poll_payload = {
+                    "model": "openai",
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "You are an expert Indonesian Islamic & Science Motion Graphics scriptwriter. Always respond with valid, pure JSON matching the requested schema.",
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.35,
+                }
+                req = urllib.request.Request(
+                    "https://text.pollinations.ai/openai",
+                    data=json.dumps(poll_payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+                )
+                resp_raw = urllib.request.urlopen(req, timeout=60).read().decode("utf-8")
+                resp_obj = json.loads(resp_raw)
+                content_str = (
+                    resp_obj.get("choices", [{}])[0]
+                    .get("message", {})
+                    .get("content", "")
+                    .strip()
+                )
+                content_str = re.sub(r"^```(?:json)?\s*", "", content_str)
+                content_str = re.sub(r"\s*```$", "", content_str)
+                parsed_poll = json.loads(content_str)
+                if isinstance(parsed_poll.get("scenes"), list) and len(parsed_poll["scenes"]) >= 6:
+                    data = parsed_poll
+                    print(f"[AI EXPLAINER] Berhasil menyusun {len(data['scenes'])} scene spesifik topik via Free AI Cloud!")
+                    break
+            except Exception as poll_err:
+                print(f"[PERINGATAN] Free AI Cloud percobaan #{poll_attempt + 1} gagal ({str(poll_err)[:110]})...")
+                time.sleep(2)
 
     if data is None:
         print("[INFO] Menggunakan generator cadangan cerdas untuk menyusun 10 Scene Explainer...")
@@ -588,6 +875,10 @@ def apply_islamic_phonetic_pronunciation(text: str) -> str:
         (r"(?i)\bshalihah\b", "sholihah"),
         (r"(?i)\bshalih\b", "sholih"),
         (r"(?i)\bramadhan\b", "Romadhon"),
+        (r"(?i)\brabbil\b", "robbil"),
+        (r"(?i)\brabbina\b", "robbina"),
+        (r"(?i)\brabbi\b", "robbi"),
+        (r"(?i)\bsakhkhara\b", "sakhkhoro"),
     ]
     out = text
     for pattern, repl in phonetic_rules:
@@ -1168,24 +1459,30 @@ def build_complete_explainer_package(
 
     # Pasang Logo Islamic K1 kecil di Kanan Atas + Sambungkan Video SUBSCRIBE ISLAMIC K1.mp4 di Akhir
     # Jika engine Remotion (React 1080p Motion Graphics 100% Gratis) tersedia, render visual dengan Remotion
-    remotion_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "remotion_explainer")
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    remotion_dir = os.path.join(base_dir, "remotion_explainer")
+    portable_node_dir = os.path.join(base_dir, "node_portable", "node-v20.18.0-win-x64")
+    if os.path.isdir(portable_node_dir) and portable_node_dir not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = portable_node_dir + os.pathsep + os.environ.get("PATH", "")
+
     if os.path.isdir(os.path.join(remotion_dir, "node_modules")):
         try:
             print("[REMOTION ENGINE] Merender animasi React Remotion 1080p (100% Gratis)...")
             theme_keys = list(SCENE_THEMES.keys())
+            remotion_fps = 12
             remotion_scenes = []
             for idx, sc in enumerate(scenes):
                 c_dur = get_video_duration(scene_clips[idx])
                 remotion_scenes.append(
                     {
                         "scene_number": idx + 1,
-                        "section_badge": str(sc.get("section_badge", f"BAGIAN {idx + 1}")),
+                        "section_badge": str(sc.get("chapter_title") or sc.get("section_badge") or f"BAGIAN {idx + 1}"),
                         "headline": str(sc.get("headline", topic_title)),
                         "bullet_points": list(sc.get("bullet_points", []))[:3],
                         "highlight_box": str(sc.get("highlight_box", "")),
                         "icon_type": str(sc.get("icon_type", "mosque")),
-                        "theme_name": str(sc.get("theme_name") or theme_keys[idx % len(theme_keys)]),
-                        "durationInFrames": max(60, int(round(c_dur * 30))),
+                        "theme_name": str(sc.get("theme") or sc.get("theme_name") or theme_keys[idx % len(theme_keys)]),
+                        "durationInFrames": max(24, int(round(c_dur * remotion_fps))),
                     }
                 )
             props_path = os.path.join(work_dir, "remotion_props.json")
@@ -1196,15 +1493,28 @@ def build_complete_explainer_package(
                     ensure_ascii=False,
                 )
             remotion_vis = os.path.join(work_dir, "remotion_vis.mp4")
-            npx_bin = "npx.cmd" if os.name == "nt" else "npx"
+            npx_bin = os.path.join(portable_node_dir, "npx.cmd") if os.path.exists(os.path.join(portable_node_dir, "npx.cmd")) else ("npx.cmd" if os.name == "nt" else "npx")
+            cpu_concurrency = max(2, min(6, os.cpu_count() or 4))
             subprocess.run(
-                [npx_bin, "remotion", "render", "src/index.ts", "IslamicK1Explainer", remotion_vis, f"--props={props_path}", "--concurrency=2"],
+                [
+                    npx_bin,
+                    "remotion",
+                    "render",
+                    "src/index.ts",
+                    "IslamicK1Explainer",
+                    remotion_vis,
+                    f"--props={props_path}",
+                    f"--concurrency={cpu_concurrency}",
+                    "--image-format=jpeg",
+                    "--jpeg-quality=85",
+                ],
                 cwd=remotion_dir,
+                env=os.environ.copy(),
                 check=True,
             )
             remotion_merged = os.path.join(work_dir, "remotion_merged.mp4")
             subprocess.run(
-                ["ffmpeg", "-y", "-i", remotion_vis, "-i", raw_explainer_mp4, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "copy", "-shortest", remotion_merged],
+                ["ffmpeg", "-y", "-i", remotion_vis, "-i", raw_explainer_mp4, "-map", "0:v:0", "-map", "1:a:0", "-vf", "fps=30,scale=1920:1080,setsar=1,format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-c:a", "copy", "-shortest", remotion_merged],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 check=True,

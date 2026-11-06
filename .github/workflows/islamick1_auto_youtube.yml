@@ -26,7 +26,7 @@ permissions:
 
 concurrency:
   group: islamick1-youtube-pipeline
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   process-one-video:

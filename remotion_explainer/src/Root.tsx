@@ -25,7 +25,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="IslamicK1Explainer"
         component={ExplainerVideo}
-        fps={30}
+        fps={12}
         width={1920}
         height={1080}
         defaultProps={{
@@ -35,12 +35,12 @@ export const RemotionRoot: React.FC = () => {
         }}
         calculateMetadata={({ props }) => {
           const totalFrames = (props.scenes || defaultScenes).reduce(
-            (acc, s) => acc + Math.max(30, s.durationInFrames || 300),
+            (acc, s) => acc + Math.max(24, s.durationInFrames || 180),
             0
           );
           return {
-            durationInFrames: Math.max(60, totalFrames),
-            fps: 30,
+            durationInFrames: Math.max(48, totalFrames),
+            fps: 12,
             width: 1920,
             height: 1080
           };
