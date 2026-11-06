@@ -53,6 +53,11 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Install Remotion (100% Free Motion Graphics Engine)
+        run: |
+          cd remotion_explainer
+          npm install --no-audit --no-fund
+
       - name: Jalankan Pipeline Terpadu (Google Form Motion Grafis 3 Menit & Antrian NotebookLM)
         env:
           GOOGLE_DRIVE_TOKEN_JSON: ${{ secrets.GOOGLE_DRIVE_TOKEN_JSON }}
