@@ -949,16 +949,7 @@ def process_google_form_explainer_queue(
 
                 uploaded_video_id = response_yt["id"]
                 print(f"[YOUTUBE FORM] Berhasil diunggah! Link: https://youtu.be/{uploaded_video_id}")
-
-                # Pasang Custom Thumbnail High-CTR
-                try:
-                    youtube.thumbnails().set(
-                        videoId=uploaded_video_id,
-                        media_body=MediaFileUpload(pkg["thumbnail_path"], mimetype="image/jpeg"),
-                    ).execute(num_retries=5)
-                    print("[YOUTUBE FORM] Custom Thumbnail berhasil dipasang.")
-                except Exception as e:
-                    print(f"[PERINGATAN] Gagal memasang custom thumbnail: {e}")
+                print("[YOUTUBE FORM] Sesuai pengaturan: Tidak membuat/mengganti thumbnail otomatis (Thumbnail diatur manual oleh Anda).")
 
                 # Masukkan ke Playlist yang sesuai
                 try:

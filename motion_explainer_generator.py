@@ -1655,28 +1655,7 @@ def build_complete_explainer_package(
         cut_last_seconds=0.0,  # Jangan potong 4 detik akhir karena ini video asli buatan kita, bukan NotebookLM!
     )
     print(f"[FFMPEG] Video Motion Grafis selesai! Durasi total dengan outro Subscribe: {final_duration:.1f} detik ({final_duration/60:.1f} menit)")
-
-    # Buat Kartu Visual Kanan & Render Thumbnail YouTube Studio V3
-    card_path = os.path.join(work_dir, "explainer_card.png")
-    generate_explainer_thumbnail_card(
-        explainer_data=explainer_data,
-        topic_title=topic_title,
-        target_audience=target_audience,
-        font_path=font_path,
-        output_card_path=card_path,
-    )
-
-    thumb_path = os.path.join(work_dir, "thumbnail_explainer.jpg")
-    generate_youtube_thumbnail(
-        video_path=raw_explainer_mp4,
-        logo_path=logo_path,
-        font_path=font_path,
-        thumbnail_title=explainer_data.get("thumbnail_hook") or topic_title.upper()[:38],
-        subtitle_badge=explainer_data.get("thumbnail_badge") or f"ISLAMIC K1 • {target_audience.upper()[:16]}",
-        output_thumb_path=thumb_path,
-        original_filename="",
-        book_cover_path=card_path,
-    )
+    thumb_path = ""
 
     # Susun Deskripsi Lengkap (Salam Pembuka + 3 Paragraf + Chapters/Timeline + Info Channel + Salam Penutup + Hashtag)
     timeline_block = validate_youtube_timeline(chapters, cumulative_sec)
