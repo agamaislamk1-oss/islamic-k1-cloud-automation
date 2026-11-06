@@ -267,8 +267,17 @@ def fetch_existing_youtube_videos(youtube, cached_videos: Optional[List[Dict[str
     """
     Mengambil daftar seluruh video yang sudah ada di channel YouTube Islamic K1
     agar JANGAN SAMPAI ada video yang terupload ulang.
+    Jika kuota harian YouTube API sedang penuh (403 quotaExceeded), otomatis menggunakan cached_videos.
     """
-    ch_res = youtube.channels().list(part="contentDetails,snippet", mine=True).execute()
+    existing_map = {v["video_id"]: v for v in (cached_videos or []) if "video_id" in v}
+    try:
+        ch_res = youtube.channels().list(part="contentDetails,snippet", mine=True).execute()
+    except HttpError as e:
+        if "quotaExceeded" in str(e) or "uploadLimitExceeded" in str(e):
+            print("[INFO KUOTA HARIAN] Kuota harian YouTube API (10.000 poin/hari) sudah terpakai maksimal hari ini.")
+            raise
+        raise
+
     items = ch_res.get("items", [])
     if not items:
         raise RuntimeError("Channel YouTube tidak ditemukan pada token ini.")
@@ -284,7 +293,6 @@ def fetch_existing_youtube_videos(youtube, cached_videos: Optional[List[Dict[str
     print(f"[INFO] Terverifikasi Channel YouTube: {channel_title} (ID: {channel_id})")
     uploads_playlist_id = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
 
-    existing_map = {v["video_id"]: v for v in (cached_videos or []) if "video_id" in v}
     full_scan_needed = len(existing_map) < 100
 
     next_page = None
@@ -292,16 +300,22 @@ def fetch_existing_youtube_videos(youtube, cached_videos: Optional[List[Dict[str
     max_pages = 100 if full_scan_needed else 2
 
     while pages_fetched < max_pages:
-        pl_res = (
-            youtube.playlistItems()
-            .list(
-                part="snippet,contentDetails",
-                playlistId=uploads_playlist_id,
-                maxResults=50,
-                pageToken=next_page,
+        try:
+            pl_res = (
+                youtube.playlistItems()
+                .list(
+                    part="snippet,contentDetails",
+                    playlistId=uploads_playlist_id,
+                    maxResults=50,
+                    pageToken=next_page,
+                )
+                .execute()
             )
-            .execute()
-        )
+        except HttpError as e:
+            if "quotaExceeded" in str(e):
+                print("[INFO KUOTA HARIAN] Kuota harian YouTube API sudah penuh saat memindai playlist.")
+                raise
+            raise
         for item in pl_res.get("items", []):
             title = item["snippet"]["title"]
             desc = item["snippet"].get("description", "")
@@ -1043,7 +1057,16 @@ def run_queue_pipeline():
 
     # 2. Ambil riwayat upload & daftar video eksisting di channel Islamic K1
     history_data, history_file_id = load_upload_history(drive, root_id)
-    existing_yt_videos = fetch_existing_youtube_videos(youtube, history_data.get("cached_youtube_videos"))
+    try:
+        existing_yt_videos = fetch_existing_youtube_videos(youtube, history_data.get("cached_youtube_videos"))
+    except HttpError as quota_err:
+        if "quotaExceeded" in str(quota_err) or "uploadLimitExceeded" in str(quota_err):
+            print(
+                "[INFO SESI SELESAI] Batas kuota harian gratis YouTube API (10.000 unit/hari) telah terpakai penuh hari ini "
+                "setelah mengunggah banyak video. Sistem akan otomatis melanjutkan sisa antrian saat kuota di-reset!"
+            )
+            return
+        raise
     history_data["cached_youtube_videos"] = existing_yt_videos
     history_file_id = save_upload_history(drive, root_id, history_data, history_file_id)
 
