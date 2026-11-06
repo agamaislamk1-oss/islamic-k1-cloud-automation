@@ -1,0 +1,7 @@
+# Jangan pernah meng-commit file rahasia OAuth ke dalam repository Git!
+client_secret*.json
+token*.json
+__pycache__/
+*.pyc
+*.temp_audio.mp3
+*.frame.jpg

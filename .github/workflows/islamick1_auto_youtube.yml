@@ -1,0 +1,66 @@
+name: IslamicK1 Auto Video Editor & YouTube Uploader (24/7 Cloud)
+
+on:
+  # Mengecek Google Sheet Form Motion Grafis & Folder Google Drive otomatis setiap 4 jam sekali
+  schedule:
+    - cron: "15 */4 * * *"
+  # Bisa dipicu otomatis saat Google Form di-submit atau 1-klik manual (Run workflow)
+  workflow_dispatch:
+    inputs:
+      form_title:
+        description: "Judul / Topik Video Motion Grafis 3 Menit (Opsional - dari Google Form)"
+        required: false
+        default: ""
+      form_audience:
+        description: "Target Audience (Opsional - contoh: Keluarga Muslim, Anak SD, Remaja)"
+        required: false
+        default: ""
+      form_category:
+        description: "Kategori: Islami / Umum (Opsional)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: islamick1-youtube-pipeline
+  cancel-in-progress: false
+
+jobs:
+  process-one-video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg & Font Libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libass-dev fontconfig fonts-dejavu-core fonts-liberation
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Python Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Jalankan Pipeline Terpadu (Google Form Motion Grafis 3 Menit & Antrian NotebookLM)
+        env:
+          GOOGLE_DRIVE_TOKEN_JSON: ${{ secrets.GOOGLE_DRIVE_TOKEN_JSON }}
+          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
+          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          FORM_TITLE: ${{ github.event.inputs.form_title }}
+          FORM_AUDIENCE: ${{ github.event.inputs.form_audience }}
+          FORM_CATEGORY: ${{ github.event.inputs.form_category }}
+        run: |
+          python pipeline.py
