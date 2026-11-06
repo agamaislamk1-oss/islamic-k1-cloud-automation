@@ -531,6 +531,70 @@ async def _edge_tts_save(text: str, voice: str, rate: str, out_path: str) -> Non
     await communicate.save(out_path)
 
 
+def apply_islamic_phonetic_pronunciation(text: str) -> str:
+    """
+    Mengubah ejaan khusus untuk input mesin suara (TTS) agar pelafalan Lafaz Jalalah (Allah -> Alloh)
+    dan seluruh turunannya (Rasulullah -> Rosululloh, warahmatullahi -> warohmatullohi, dll.)
+    terdengar fasih dan tebal (tafkhim), TANPA mengubah teks visual yang tampil di layar!
+    """
+    phonetic_rules = [
+        # Singkatan umum Islami -> dibaca penuh & fasih
+        (r"\bSWT\b", "Subhanahu wa Ta'ala"),
+        (r"\bSAW\b", "shollallohu 'alaihi wa sallam"),
+        (r"\bRA\b", "rodhiyallohu 'anhu"),
+        (r"\bQS\.\s*", "Qur'an Surat "),
+        (r"\bHR\.\s*", "Hadits Riwayat "),
+        # Salam, Basmalah, & Kalimat Thayyibah
+        (r"(?i)\bwarahmatullahi\b", "warohmatullohi"),
+        (r"(?i)\bwarahmatullah\b", "warohmatulloh"),
+        (r"(?i)\bwabarakatuh\b", "wabarokatuh"),
+        (r"(?i)\bbismillahirrahmanirrahim\b", "bismillahirrohmanirrohim"),
+        (r"(?i)\bar-rahman\b", "ar-rohman"),
+        (r"(?i)\bar-rahim\b", "ar-rohim"),
+        # Rasulullah & Shalawat
+        (r"(?i)\brasulullah\b", "Rosululloh"),
+        (r"(?i)\brasul-nya\b", "Rosul-Nya"),
+        (r"(?i)\brasul\b", "Rosul"),
+        (r"(?i)\bshallallahu\b", "shollallohu"),
+        (r"(?i)\bsallallahu\b", "shollallohu"),
+        (r"(?i)\bshalawat\b", "sholawat"),
+        # Sahabat & Ulama
+        (r"(?i)\bradhiyallahu\b", "rodhiyallohu"),
+        (r"(?i)\brahimahullahu\b", "rohimahullohu"),
+        (r"(?i)\brahimahullah\b", "rohimahulloh"),
+        # Turunan Lafaz Allah (Tafkhim: huruf sebelum Lafaz Allah berharakat fathah/dhammah dibaca "lloh")
+        (r"(?i)\bsubhanallahi\b", "subhanallohi"),
+        (r"(?i)\bsubhanallah\b", "subhanalloh"),
+        (r"(?i)\binsya\s*allah\b", "insya Alloh"),
+        (r"(?i)\bmasya\s*allah\b", "masya Alloh"),
+        (r"(?i)\bastaghfirullahal\s*'azhim\b", "astaghfirullohal 'azhim"),
+        (r"(?i)\bastaghfirullah\b", "astaghfirulloh"),
+        (r"(?i)\bwallahu\b", "wallohu"),
+        (r"(?i)\bwallahi\b", "wallohi"),
+        (r"(?i)\bhadanallahu\b", "hadanallohu"),
+        (r"(?i)\bbarakallahu\b", "barokallohu"),
+        (r"(?i)\bbarakallah\b", "barokalloh"),
+        (r"(?i)\baitullah\b", "baitulloh"),
+        (r"(?i)\bhamba\s+allah\b", "hamba Alloh"),
+        (r"(?i)\binsyaallah\b", "insya Alloh"),
+        (r"(?i)\bmasyaallah\b", "masya Alloh"),
+        (r"(?i)\ballahu\s+akbar\b", "Allohu Akbar"),
+        (r"(?i)\ballahumma\b", "Allohumma"),
+        (r"(?i)\ballahu\b", "Allohu"),
+        (r"(?i)\ballah\b", "Alloh"),
+        # Istilah ibadah & kitab yang sering dibaca kurang tepat oleh TTS standar
+        (r"(?i)\bshalat\b", "sholat"),
+        (r"(?i)\bshalihin\b", "sholihin"),
+        (r"(?i)\bshalihah\b", "sholihah"),
+        (r"(?i)\bshalih\b", "sholih"),
+        (r"(?i)\bramadhan\b", "Romadhon"),
+    ]
+    out = text
+    for pattern, repl in phonetic_rules:
+        out = re.sub(pattern, repl, out)
+    return out
+
+
 def synthesize_tts_audio(text: str, output_mp3_path: str, voice_gender: str = "male") -> float:
     """
     Menghasilkan suara narator Bahasa Indonesia jernih (100% GRATIS):
@@ -541,6 +605,7 @@ def synthesize_tts_audio(text: str, output_mp3_path: str, voice_gender: str = "m
     """
     clean_text = re.sub(r"[*#_~`<>]+", " ", text)
     clean_text = re.sub(r"\s+", " ", clean_text).strip()
+    clean_text = apply_islamic_phonetic_pronunciation(clean_text)
 
     voice_name = "id-ID-GadisNeural" if str(voice_gender).lower() == "female" else "id-ID-ArdiNeural"
     raw_mp3 = output_mp3_path + ".raw.mp3"
