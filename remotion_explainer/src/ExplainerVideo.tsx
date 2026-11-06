@@ -14,6 +14,7 @@ export interface SceneItem {
   headline: string;
   bullet_points: string[];
   highlight_box: string;
+  image_url?: string;
   icon_type: string;
   theme_name: string;
   durationInFrames: number;
@@ -349,69 +350,128 @@ const SceneCard: React.FC<{
         </div>
       </div>
 
-      {/* 3 Staggered 3D Spring Cards with Active Spotlight Glow */}
+      {/* Main Content Split: 3 Staggered Bullet Cards (Left) + Dynamic Motion Illustration (Right) */}
       <div
         style={{
-          marginTop: 28,
+          marginTop: 24,
           display: "flex",
-          flexDirection: "column",
-          gap: 18,
-          maxWidth: 1740
+          alignItems: "stretch",
+          gap: 28,
+          maxWidth: 1776
         }}
       >
-        {points.map((pt, idx) => {
-          const sp = bulletSprings[idx] ?? 1;
-          const isCurrent = activeBulletIdx === idx;
-          const pulseScale = isCurrent ? 1 + Math.sin(frame * 0.12) * 0.012 : 1;
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            gap: 16,
+            justifyContent: "center"
+          }}
+        >
+          {points.map((pt, idx) => {
+            const sp = bulletSprings[idx] ?? 1;
+            const isCurrent = activeBulletIdx === idx;
+            const pulseScale = isCurrent ? 1 + Math.sin(frame * 0.12) * 0.012 : 1;
 
-          return (
-            <div
-              key={idx}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 24,
-                background: isCurrent
-                  ? `linear-gradient(90deg, ${theme.card} 0%, ${theme.accent}28 100%)`
-                  : theme.card,
-                border: isCurrent ? `3.5px solid ${theme.accent}` : `2px solid rgba(255,255,255,0.22)`,
-                borderRadius: 22,
-                padding: "20px 28px",
-                transform: `translateX(${interpolate(sp, [0, 1], [-120, 0])}px) scale(${interpolate(sp, [0, 1], [0.9, pulseScale])})`,
-                opacity: sp
-              }}
-            >
+            return (
               <div
+                key={idx}
                 style={{
-                  minWidth: 64,
-                  height: 64,
-                  borderRadius: 18,
-                  background: isCurrent ? theme.accent : "rgba(255,255,255,0.14)",
-                  color: isCurrent ? "#041c15" : theme.accent,
-                  border: `2px solid ${theme.accent}`,
                   display: "flex",
                   alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 30,
-                  fontWeight: 900,
-                  boxShadow: isCurrent ? `0 0 18px ${theme.accent}88` : "none"
+                  gap: 20,
+                  background: isCurrent
+                    ? `linear-gradient(90deg, ${theme.card} 0%, ${theme.accent}28 100%)`
+                    : theme.card,
+                  border: isCurrent ? `3.5px solid ${theme.accent}` : `2px solid rgba(255,255,255,0.22)`,
+                  borderRadius: 22,
+                  padding: "18px 24px",
+                  transform: `translateX(${interpolate(sp, [0, 1], [-120, 0])}px) scale(${interpolate(sp, [0, 1], [0.9, pulseScale])})`,
+                  opacity: sp
                 }}
               >
-                0{idx + 1}
+                <div
+                  style={{
+                    minWidth: 58,
+                    height: 58,
+                    borderRadius: 16,
+                    background: isCurrent ? theme.accent : "rgba(255,255,255,0.14)",
+                    color: isCurrent ? "#041c15" : theme.accent,
+                    border: `2px solid ${theme.accent}`,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 28,
+                    fontWeight: 900
+                  }}
+                >
+                  0{idx + 1}
+                </div>
+                <div
+                  style={{
+                    fontSize: 30,
+                    fontWeight: 800,
+                    lineHeight: 1.25,
+                    color: isCurrent ? "#ffffff" : theme.soft
+                  }}
+                >
+                  {pt}
+                </div>
               </div>
-              <div
-                style={{
-                  fontSize: 33,
-                  fontWeight: 800,
-                  lineHeight: 1.26,
-                  color: isCurrent ? "#ffffff" : theme.soft
-                }}
-              >
-                {pt}
-              </div>
+            );
+          })}
+        </div>
+
+        {/* Dynamic Animated Visual Illustration Panel (Non-Static: Ken Burns Zoom + Pan + Floating Frame) */}
+        {scene.image_url && (
+          <div
+            style={{
+              width: 560,
+              height: 416,
+              borderRadius: 26,
+              border: `4px solid ${theme.accent}`,
+              background: theme.card,
+              overflow: "hidden",
+              position: "relative",
+              flexShrink: 0,
+              transform: `translateY(${Math.sin(frame * 0.08) * 6}px) scale(${interpolate(headerSpring, [0, 1], [0.85, 1])})`,
+              opacity: headerSpring
+            }}
+          >
+            <img
+              src={scene.image_url}
+              alt={scene.headline}
+              style={{
+                width: "100%",
+                height: "100%",
+                objectFit: "cover",
+                transform: `scale(${interpolate(frame, [0, dur], [1.02, 1.22], {
+                  extrapolateRight: "clamp"
+                })}) translate(${Math.sin(frame * 0.05) * 10}px, ${Math.cos(frame * 0.04) * 8}px)`
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                left: 14,
+                right: 14,
+                bottom: 12,
+                background: "rgba(4, 22, 17, 0.86)",
+                border: `1.5px solid ${theme.accent}`,
+                borderRadius: 12,
+                padding: "7px 14px",
+                fontSize: 17,
+                fontWeight: 800,
+                color: theme.soft,
+                textAlign: "center",
+                letterSpacing: 0.6
+              }}
+            >
+              🎬 VISUAL SCENE {String(scene.scene_number).padStart(2, "0")}: {scene.headline.slice(0, 32)}
             </div>
-          );
-        })}
+          </div>
+        )}
       </div>
 
       {/* Bottom Golden Dalil / Hikmah Card */}

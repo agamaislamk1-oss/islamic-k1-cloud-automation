@@ -639,15 +639,16 @@ ATURAN WAJIB NASKAH & VIDEO (JANGAN DILANGGAR):
 3. **Isi Materi Berkualitas Tinggi (Islami maupun Umum)**:
    - Jika topiknya **Islami**, sertakan dalil Al-Qur'an atau Hadits yang **shahih** beserta nama surat/ayat atau perawinya di dalam narasi dan di `highlight_box`.
    - Jika topiknya **Umum** (sains, psikologi, tips belajar, kesehatan, sejarah, keuangan, dll.), jelaskan secara ilmiah, praktis, dan tetap selaras dengan adab serta nilai kebaikan keluarga Muslim.
-4. **Struktur Visual Setiap Scene (Motion Graphics)**:
+4. **Struktur Visual Setiap Scene (Motion Graphics + Gambar Ilustrasi AI per Scene)**:
    - `scene_number`: 1 sampai 10.
    - `chapter_title`: Judul babak untuk fitur Chapters/Timeline YouTube (3-7 kata).
    - `narration_text`: Naskah voiceover bersih (tanpa simbol markdown `*` atau `#`, tulis angka/singkatan agar mudah dibaca oleh Text-to-Speech, misal tulis "Subhanahu wa Ta'ala" bukan "SWT", tulis "Shallallahu 'alaihi wa sallam" bukan "SAW").
    - `headline`: Judul besar di layar (maksimal 5 kata, huruf kapital tegas).
    - `bullet_points`: Tepat **3 poin ringkas** (masing-masing 5–9 kata) yang akan dimunculkan satu per satu secara animasi (*kinetic reveal*) seiring narator berbicara.
    - `highlight_box`: 1 kalimat kutipan dalil Al-Qur'an/Hadits, fakta kunci, atau hikmah utama (10–18 kata) untuk ditampilkan di kotak emas bagian bawah layar.
+   - `image_prompt`: Deskripsi visual spesifik dalam **Bahasa Inggris** (15–25 kata) yang menggambarkan persis apa yang sedang dibahas pada scene tersebut untuk digenerate menjadi gambar ilustrasi 3D edukatif (contoh: `"3D Pixar style educational illustration of an airplane wing showing blue airflow arrows lifting the aircraft in bright sky, no text"`).
    - `theme`: Pilih salah satu secara bervariasi antar-scene: `"emerald_gold"`, `"royal_teal"`, `"midnight_amber"`, `"deep_ocean"`, `"warm_emerald"`.
-   - `icon_type`: Pilih salah satu ikon yang paling cocok dengan isi scene: `"mosque"`, `"book"`, `"star"`, `"heart"`, `"lightbulb"`, `"shield"`, `"compass"`, `"check"`, `"sparkle"`.
+   - `icon_type`: Pilih salah satu ikon yang paling cocok dengan isi scene: `"mosque"`, `"book"`, `"star"`, `"heart"`, `"lightbulb"`, `"shield"`, `"compass"`, `"check"`, `"sparkle"`, `"plane"`.
 5. **Metadata YouTube Lengkap**:
    - `title`: Judul YouTube yang sangat menarik bagi **{clean_audience}** (maksimal 85 karakter, mengandung topik utama & kata kunci pencari).
    - `thumbnail_hook`: 3-5 kata ekstra tegas untuk gambar Thumbnail (contoh: `"RAHASIA & KEUTAMAAN SEDEKAH SUBUH"`).
@@ -683,6 +684,7 @@ Kembalikan HANYA JSON murni yang valid dengan struktur berikut:
       "headline": "...",
       "bullet_points": ["Poin 1...", "Poin 2...", "Poin 3..."],
       "highlight_box": "...",
+      "image_prompt": "3D Pixar style educational illustration of ..., warm lighting, no text",
       "theme": "emerald_gold",
       "icon_type": "mosque"
     }}
@@ -1011,6 +1013,88 @@ def _draw_vector_icon(draw: ImageDraw.ImageDraw, cx: int, cy: int, radius: int, 
         draw.line([(cx - 18, cy + 2), (cx - 4, cy + 16), (cx + 22, cy - 14)], fill=c_rgba, width=7)
 
 
+def fetch_or_create_scene_illustration(
+    scene: Dict[str, Any],
+    topic_title: str,
+    target_audience: str,
+    font_path: str,
+    work_dir: str,
+) -> Tuple[str, str]:
+    """
+    Menghasilkan 1 gambar ilustrasi visual (640x480) yang menerangkan isi pembahasan pada scene tersebut (100% GRATIS):
+    - Prioritas 1: Free AI Image Generator (Pollinations Flux/SDXL Tanpa API Key) berdasarkan `image_prompt` atau `headline`.
+    - Prioritas 2: Ilustrasi Vektor Edukasi Prosedural beresolusi tinggi jika server gambar sedang sibuk.
+    Mengembalikan tuple: (local_image_path, data_uri_base64_jpeg) untuk dipakai langsung di Remotion & FFmpeg.
+    """
+    import base64
+    import urllib.parse
+    import urllib.request
+
+    scene_num = int(scene.get("scene_number", 1))
+    out_jpg = os.path.join(work_dir, f"scene_{scene_num:02d}_illust.jpg")
+    headline = str(scene.get("headline", topic_title)).strip()
+    chapter = str(scene.get("chapter_title", topic_title)).strip()
+    raw_prompt = str(scene.get("image_prompt", "")).strip()
+    if not raw_prompt:
+        raw_prompt = (
+            f"3D Pixar Disney style educational illustration explaining {headline} ({chapter}) "
+            f"about {topic_title} for {target_audience}, vibrant colors, clean composition, cinematic lighting, no text"
+        )
+    else:
+        raw_prompt = f"{raw_prompt}, vibrant 3D educational illustration, clean composition, no text"
+
+    img_loaded = False
+    seed_val = 100 + scene_num * 37
+    encoded_p = urllib.parse.quote(raw_prompt[:280])
+    poll_url = f"https://image.pollinations.ai/prompt/{encoded_p}?width=640&height=480&nologo=true&seed={seed_val}"
+
+    for attempt in range(2):
+        try:
+            req = urllib.request.Request(
+                poll_url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            )
+            raw_bytes = urllib.request.urlopen(req, timeout=22).read()
+            if len(raw_bytes) > 4000:
+                with open(out_jpg, "wb") as f:
+                    f.write(raw_bytes)
+                # Pastikan ukuran tepat 640x480 RGB
+                im = Image.open(out_jpg).convert("RGB").resize((640, 480), Image.Resampling.LANCZOS)
+                im.save(out_jpg, "JPEG", quality=88)
+                img_loaded = True
+                break
+        except Exception as e:
+            print(f"  [INFO GAMBAR SCENE {scene_num:02d}] Percobaan AI Image #{attempt + 1} lewat ({str(e)[:70]}), menggunakan ilustrasi cadangan...")
+            time.sleep(1)
+
+    if not img_loaded:
+        # Buat ilustrasi kanvas edukatif berwarna kaya jika internet gambar sedang lambat
+        theme_name = str(scene.get("theme", "emerald_gold")).lower()
+        theme = SCENE_THEMES.get(theme_name, SCENE_THEMES["emerald_gold"])
+        canvas = Image.new("RGBA", (640, 480), theme["bg_top"] + (255,))
+        cdraw = ImageDraw.Draw(canvas)
+        for y in range(0, 480, 4):
+            t = y / 480.0
+            r = int(theme["bg_top"][0] * (1 - t) + theme["card_bg"][0] * t)
+            g = int(theme["bg_top"][1] * (1 - t) + theme["card_bg"][1] * t)
+            b = int(theme["bg_top"][2] * (1 - t) + theme["card_bg"][2] * t)
+            cdraw.rectangle([0, y, 640, y + 4], fill=(r, g, b, 255))
+        acc = theme["accent"]
+        for rad in (90, 140, 190, 240):
+            cdraw.ellipse([320 - rad, 210 - rad, 320 + rad, 210 + rad], outline=acc + (55,), width=3)
+        _draw_vector_icon(cdraw, cx=320, cy=195, radius=84, icon_type=str(scene.get("icon_type", "mosque")), color=acc)
+        cap_font = _load_bold_font(26, font_path)
+        wrapped = textwrap.wrap(headline.upper(), width=26)[:2]
+        for idx_l, line_s in enumerate(wrapped):
+            cdraw.text((60, 340 + idx_l * 36), line_s, font=cap_font, fill=(255, 255, 255, 245))
+        canvas.convert("RGB").save(out_jpg, "JPEG", quality=88)
+
+    with open(out_jpg, "rb") as bf:
+        b64_str = base64.b64encode(bf.read()).decode("ascii")
+    data_uri = f"data:image/jpeg;base64,{b64_str}"
+    return out_jpg, data_uri
+
+
 def render_scene_stage_image(
     scene: Dict[str, Any],
     total_scenes: int,
@@ -1120,6 +1204,9 @@ def render_scene_stage_image(
 
     card_y_positions = [285, 455, 625]
     card_h = 142
+    illust_local_path = str(scene.get("_local_image_path", "")).strip()
+    has_illust = bool(illust_local_path and os.path.exists(illust_local_path))
+    card_x2 = 1230 if has_illust else (W - 76)
 
     for idx in range(3):
         cy = card_y_positions[idx]
@@ -1133,13 +1220,13 @@ def render_scene_stage_image(
 
             # Bayangan kartu
             odraw.rounded_rectangle(
-                [76, cy + 8, W - 68, cy + card_h + 8],
+                [76, cy + 8, card_x2 + 8, cy + card_h + 8],
                 radius=22,
                 fill=(0, 0, 0, 125),
             )
             # Badan kartu utama
             odraw.rounded_rectangle(
-                [68, cy, W - 76, cy + card_h],
+                [68, cy, card_x2, cy + card_h],
                 radius=22,
                 fill=theme["card_bg"] + (bg_alpha,),
                 outline=border_col,
@@ -1155,7 +1242,8 @@ def render_scene_stage_image(
 
             # Teks poin penjelasan (maksimal 2 baris)
             b_text = str(bullets[idx]).strip()
-            wrapped_b = textwrap.wrap(b_text, width=62)[:2]
+            wrap_w = 43 if has_illust else 62
+            wrapped_b = textwrap.wrap(b_text, width=wrap_w)[:2]
             if len(wrapped_b) == 1:
                 odraw.text((216, cy + 48), wrapped_b[0], font=bullet_font, fill=(255, 255, 255, 255))
             else:
@@ -1164,12 +1252,35 @@ def render_scene_stage_image(
         else:
             # Placeholder tipis sebelum poin muncul
             odraw.rounded_rectangle(
-                [68, cy, W - 76, cy + card_h],
+                [68, cy, card_x2, cy + card_h],
                 radius=22,
                 fill=(255, 255, 255, 10),
                 outline=(255, 255, 255, 30),
                 width=1,
             )
+
+    # 4B. Gambar Visual Ilustrasi di Sisi Kanan (x: 1265..1845, y: 285..767) dengan efek Zoom Bertahap!
+    if has_illust:
+        try:
+            box_x1, box_y1, box_w, box_h = 1265, 285, 580, 482
+            odraw.rounded_rectangle(
+                [box_x1 - 6, box_y1 - 6, box_x1 + box_w + 6, box_y1 + box_h + 6],
+                radius=26,
+                fill=theme["card_bg"] + (240,),
+                outline=theme["accent"] + (255,),
+                width=4,
+            )
+            im_src = Image.open(illust_local_path).convert("RGB")
+            # Efek Ken Burns (zoom bertahap per stage_index)
+            zoom_factor = 1.0 + (stage_index * 0.04)
+            zw, zh = int(box_w * zoom_factor), int(box_h * zoom_factor)
+            im_zoomed = im_src.resize((zw, zh), Image.Resampling.LANCZOS)
+            left_c = (zw - box_w) // 2
+            top_c = (zh - box_h) // 2
+            im_cropped = im_zoomed.crop((left_c, top_c, left_c + box_w, top_c + box_h)).convert("RGBA")
+            base.paste(im_cropped, (box_x1, box_y1))
+        except Exception:
+            pass
 
     # 5. Kotak Highlight Dalil / Hikmah Utama di Bagian Bawah (Muncul penuh pada stage_index >= 3)
     highlight_text = str(scene.get("highlight_box", "")).strip()
@@ -1417,9 +1528,18 @@ def build_complete_explainer_package(
     chapters: List[Dict[str, Any]] = []
     cumulative_sec = 0.0
 
-    print(f"[MOTION ENGINE] Merender {total_scenes} Scene Motion Grafis & Voiceover Bahasa Indonesia...")
+    print(f"[MOTION ENGINE] Merender {total_scenes} Scene Motion Grafis, Ilustrasi Visual AI, & Voiceover Bahasa Indonesia...")
     for idx, sc in enumerate(scenes):
         sc["scene_number"] = idx + 1
+        local_img_path, img_data_uri = fetch_or_create_scene_illustration(
+            scene=sc,
+            topic_title=topic_title,
+            target_audience=target_audience,
+            font_path=font_path,
+            work_dir=work_dir,
+        )
+        sc["_local_image_path"] = local_img_path
+        sc["image_url"] = img_data_uri
         chapters.append(
             {
                 "time_seconds": int(round(cumulative_sec)),
@@ -1437,7 +1557,7 @@ def build_complete_explainer_package(
         )
         scene_clips.append(clip_path)
         cumulative_sec += clip_dur
-        print(f"  -> Scene {idx + 1:02d}/{total_scenes:02d} selesai ({clip_dur:.1f}s | Total: {cumulative_sec:.1f}s)")
+        print(f"  -> Scene {idx + 1:02d}/{total_scenes:02d} selesai (+Gambar Ilustrasi | {clip_dur:.1f}s | Total: {cumulative_sec:.1f}s)")
 
     # Gabungkan semua klip scene menjadi satu video utama
     all_scenes_txt = os.path.join(work_dir, "all_scenes_concat.txt")
@@ -1480,6 +1600,7 @@ def build_complete_explainer_package(
                         "headline": str(sc.get("headline", topic_title)),
                         "bullet_points": list(sc.get("bullet_points", []))[:3],
                         "highlight_box": str(sc.get("highlight_box", "")),
+                        "image_url": str(sc.get("image_url", "")),
                         "icon_type": str(sc.get("icon_type", "mosque")),
                         "theme_name": str(sc.get("theme") or sc.get("theme_name") or theme_keys[idx % len(theme_keys)]),
                         "durationInFrames": max(24, int(round(c_dur * remotion_fps))),
