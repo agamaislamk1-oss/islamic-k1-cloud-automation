@@ -1167,6 +1167,53 @@ def build_complete_explainer_package(
     subprocess.run(cmd_join, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
 
     # Pasang Logo Islamic K1 kecil di Kanan Atas + Sambungkan Video SUBSCRIBE ISLAMIC K1.mp4 di Akhir
+    # Jika engine Remotion (React 1080p Motion Graphics 100% Gratis) tersedia, render visual dengan Remotion
+    remotion_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "remotion_explainer")
+    if os.path.isdir(os.path.join(remotion_dir, "node_modules")):
+        try:
+            print("[REMOTION ENGINE] Merender animasi React Remotion 1080p (100% Gratis)...")
+            theme_keys = list(SCENE_THEMES.keys())
+            remotion_scenes = []
+            for idx, sc in enumerate(scenes):
+                c_dur = get_video_duration(scene_clips[idx])
+                remotion_scenes.append(
+                    {
+                        "scene_number": idx + 1,
+                        "section_badge": str(sc.get("section_badge", f"BAGIAN {idx + 1}")),
+                        "headline": str(sc.get("headline", topic_title)),
+                        "bullet_points": list(sc.get("bullet_points", []))[:3],
+                        "highlight_box": str(sc.get("highlight_box", "")),
+                        "icon_type": str(sc.get("icon_type", "mosque")),
+                        "theme_name": str(sc.get("theme_name") or theme_keys[idx % len(theme_keys)]),
+                        "durationInFrames": max(60, int(round(c_dur * 30))),
+                    }
+                )
+            props_path = os.path.join(work_dir, "remotion_props.json")
+            with open(props_path, "w", encoding="utf-8") as pf:
+                json.dump(
+                    {"topicTitle": topic_title, "targetAudience": target_audience, "scenes": remotion_scenes},
+                    pf,
+                    ensure_ascii=False,
+                )
+            remotion_vis = os.path.join(work_dir, "remotion_vis.mp4")
+            npx_bin = "npx.cmd" if os.name == "nt" else "npx"
+            subprocess.run(
+                [npx_bin, "remotion", "render", "src/index.ts", "IslamicK1Explainer", remotion_vis, f"--props={props_path}", "--concurrency=2"],
+                cwd=remotion_dir,
+                check=True,
+            )
+            remotion_merged = os.path.join(work_dir, "remotion_merged.mp4")
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", remotion_vis, "-i", raw_explainer_mp4, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "copy", "-shortest", remotion_merged],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+            os.replace(remotion_merged, raw_explainer_mp4)
+            print("[REMOTION ENGINE] Animasi Remotion 1080p berhasil digabungkan dengan Voiceover!")
+        except Exception as rem_err:
+            print(f"[INFO REMOTION] Menggunakan hasil Kinetic Engine standar ({rem_err})")
+
     final_video_path = os.path.join(work_dir, "final_explainer_islamick1.mp4")
     print("[FFMPEG] Menambahkan Logo Islamic K1 di kanan atas & menyambungkan video SUBSCRIBE di akhir...")
     final_duration = render_final_video(
