@@ -24,6 +24,7 @@ import re
 import math
 import json
 import time
+import shutil
 import asyncio
 import textwrap
 import subprocess
@@ -1809,6 +1810,70 @@ def generate_explainer_thumbnail_card(
     return output_card_path
 
 
+def _generate_subtle_halal_sfx_wav(total_duration: float, stage_durations: List[float], out_wav_path: str) -> Optional[str]:
+    """
+    Menghasilkan efek suara transisi & kemunculan poin yang 100% HALAL (TANPA alat musik/nada lonceng)
+    dan 100% GRATIS bebas klaim hak cipta:
+    - Desir angin lembut (soft air whoosh) di awal perpindahan scene (t = 0.02s).
+    - Ketukan udara lembut (soft tactile pop/tap non-musikal) saat Kartu Poin 1, 2, 3 & Pointer Callout muncul.
+    """
+    import wave
+    import struct
+    import random
+
+    try:
+        sr = 44100
+        total_samples = max(sr, int(total_duration * sr))
+        buf = [0.0] * total_samples
+
+        # 1. Soft Air Whoosh di awal scene (0.02s .. 0.30s) menggunakan filtered white noise
+        w_start = int(0.02 * sr)
+        w_len = int(0.28 * sr)
+        prev = 0.0
+        rng = random.Random(42)
+        for i in range(w_len):
+            idx = w_start + i
+            if idx >= total_samples:
+                break
+            prog = i / float(w_len)
+            env = math.sin(prog * math.pi) ** 1.6
+            raw_noise = (rng.random() * 2.0 - 1.0)
+            # Low-pass filter sederhana agar terdengar seperti hembusan udara halus
+            prev = prev * 0.88 + raw_noise * 0.12
+            buf[idx] += prev * env * 0.22
+
+        # 2. Soft Tactile Pop (ketukan udara lembut non-musikal) saat tiap stage poin muncul
+        acc_t = 0.0
+        for st_i, st_d in enumerate(stage_durations[:-1]):
+            acc_t += st_d
+            p_start = int(acc_t * sr)
+            p_len = int(0.045 * sr)
+            for i in range(p_len):
+                idx = p_start + i
+                if idx >= total_samples:
+                    break
+                t_sec = i / float(sr)
+                prog = i / float(p_len)
+                env = (1.0 - prog) ** 2.8
+                # Sapuan frekuensi rendah cepat (155Hz -> 55Hz) seperti ketukan kertas/kayu halus, bukan nada musik
+                freq = 155.0 - 100.0 * prog
+                buf[idx] += math.sin(2.0 * math.pi * freq * t_sec) * env * 0.25
+
+        with wave.open(out_wav_path, "w") as wf:
+            wf.setnchannels(2)
+            wf.setsampwidth(2)
+            wf.setframerate(sr)
+            frames = bytearray()
+            for val in buf:
+                clamped = max(-0.95, min(0.95, val))
+                s_int = int(clamped * 32767)
+                frames.extend(struct.pack("<hh", s_int, s_int))
+            wf.writeframes(bytes(frames))
+        return out_wav_path
+    except Exception:
+        return None
+
+
 def render_single_scene_clip(
     scene: Dict[str, Any],
     total_scenes: int,
@@ -1819,19 +1884,43 @@ def render_single_scene_clip(
     work_dir: str,
 ) -> Tuple[str, float]:
     """
-    Merender 1 Scene Motion Grafis lengkap (Audio Voiceover + 4 Tahap Animasi Kinetic Reveal + Subtle Zoom Motion)
+    Merender 1 Scene Motion Grafis lengkap (Audio Voiceover + Subtle Halal SFX + 4 Tahap Animasi Multi-Layout)
     menjadi file MP4 berformat seragam (1920x1080, 30fps, stereo 44.1kHz).
     """
     scene_num = int(scene.get("scene_number", 1))
+    vo_only_path = os.path.join(work_dir, f"scene_{scene_num:02d}_vo.mp3")
     audio_path = os.path.join(work_dir, f"scene_{scene_num:02d}.mp3")
     narration_text = str(scene.get("narration_text", "")).strip()
 
-    audio_dur = synthesize_tts_audio(narration_text, audio_path, voice_gender=voice_gender)
+    audio_dur = synthesize_tts_audio(narration_text, vo_only_path, voice_gender=voice_gender)
     # Bagi durasi scene ke dalam 4 tahap kemunculan elemen visual (stage 0, 1, 2, 3)
     stage_weights = [0.16, 0.26, 0.26, 0.32]
     stage_durations = [max(1.2, audio_dur * w) for w in stage_weights]
     # Sesuaikan stage terakhir agar total durasi visual == audio_dur
     stage_durations[3] = max(1.2, audio_dur - sum(stage_durations[:3]))
+
+    # Campurkan Voiceover dengan Efek Suara Halus (Subtle Halal SFX: Whoosh & Soft Pop tanpa musik)
+    sfx_wav = os.path.join(work_dir, f"scene_{scene_num:02d}_sfx.wav")
+    if _generate_subtle_halal_sfx_wav(audio_dur, stage_durations, sfx_wav) and os.path.exists(sfx_wav):
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y",
+                    "-i", vo_only_path,
+                    "-i", sfx_wav,
+                    "-filter_complex", "[0:a]volume=1.0[vo];[1:a]volume=0.32[sfx];[vo][sfx]amix=inputs=2:duration=first:dropout_transition=0[aout]",
+                    "-map", "[aout]",
+                    "-c:a", "libmp3lame", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+                    audio_path,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+        except Exception:
+            shutil.copy2(vo_only_path, audio_path)
+    else:
+        shutil.copy2(vo_only_path, audio_path)
 
     stage_pngs = []
     for st_idx in range(4):
@@ -2051,8 +2140,25 @@ def build_complete_explainer_package(
         output_video_path=final_video_path,
         cut_last_seconds=0.0,  # Jangan potong 4 detik akhir karena ini video asli buatan kita, bukan NotebookLM!
     )
-    print(f"[FFMPEG] Video Motion Grafis selesai! Durasi total dengan outro Subscribe: {final_duration:.1f} detik ({final_duration/60:.1f} menit)")
+    print(f"[FFMPEG] Video Motion Grafis 16:9 selesai! Durasi total: {final_duration:.1f} detik ({final_duration/60:.1f} menit)")
     thumb_path = ""
+
+    # Render otomatis Versi Vertikal 9:16 (1080x1920, <= 56 detik) untuk YouTube Shorts / Reels
+    shorts_video_path = ""
+    shorts_duration = 0.0
+    try:
+        shorts_video_path, shorts_duration = render_vertical_shorts_video(
+            scenes=scenes,
+            topic_title=topic_title,
+            target_audience=target_audience,
+            voice_gender=voice_gender,
+            logo_path=logo_path,
+            font_path=font_path,
+            work_dir=work_dir,
+        )
+        print(f"[SHORTS ENGINE 9:16] Video YouTube Shorts 9:16 selesai! Durasi: {shorts_duration:.1f} detik (< 60s)")
+    except Exception as sh_err:
+        print(f"[PERINGATAN SHORTS] Gagal merender versi Shorts 9:16 ({sh_err}), tetap melanjutkan video utama.")
 
     # Susun Deskripsi Lengkap (Salam Pembuka + 3 Paragraf + Chapters/Timeline + Info Channel + Salam Penutup + Hashtag)
     timeline_block = validate_youtube_timeline(chapters, cumulative_sec)
@@ -2102,10 +2208,24 @@ def build_complete_explainer_package(
         except Exception:
             pass
 
+    shorts_title = f"{topic_title[:68]} #Shorts | Islamic K1"
+    shorts_desc = (
+        f"{paragraphs[0]}\n\n"
+        f"🎬 Ringkasan Cepat 60 Detik (YouTube Shorts) untuk {target_audience}.\n"
+        f"Tonton juga video penjelasan lengkap 3 menitnya di Channel Resmi Islamic K1:\n"
+        f"👉 https://www.youtube.com/@islamick1832\n\n"
+        f"{paragraphs[-1]}\n\n"
+        f"#Shorts #IslamicK1 {hashtag_line}"
+    )
+
     return {
         "final_video_path": final_video_path,
         "thumbnail_path": thumb_path,
         "final_duration": final_duration,
+        "shorts_video_path": shorts_video_path,
+        "shorts_duration": shorts_duration,
+        "shorts_title": shorts_title[:98],
+        "shorts_description": shorts_desc[:4800],
         "title": explainer_data.get("title", f"{topic_title} | {target_audience} | Islamic K1")[:95],
         "full_description": full_description,
         "tags": explainer_data.get("tags", ["Islamic K1", topic_title[:45], target_audience[:35], "Edukasi Islami"])[:15],
@@ -2113,3 +2233,223 @@ def build_complete_explainer_package(
         "recommended_publish_slot": explainer_data.get("recommended_publish_slot", "MALAM"),
         "localizations": localizations,
     }
+
+
+def render_vertical_shorts_video(
+    scenes: List[Dict[str, Any]],
+    topic_title: str,
+    target_audience: str,
+    voice_gender: str,
+    logo_path: str,
+    font_path: str,
+    work_dir: str,
+) -> Tuple[str, float]:
+    """
+    Merender Video Vertikal 9:16 (1080x1920, <= 56 detik) bergaya Motion Format v2
+    lengkap dengan 2 Gambar Internet per Beat, Pointer Callout `label()`, Subtitle Aktif `sub`,
+    Efek Suara Halus Halal (Whoosh & Pop tanpa musik), serta Logo Islamic K1 di Kanan Atas.
+    """
+    W, H = 1080, 1920
+    # Pilih 4 Scene Inti (Pembuka, Inti 1, Inti 2/Dalil, & Kesimpulan Singkat)
+    pick_indices = [0, 2, 5, len(scenes) - 1] if len(scenes) >= 6 else list(range(min(4, len(scenes))))
+    selected_scenes = [scenes[i] for i in pick_indices]
+
+    beat_clips: List[str] = []
+    for b_idx, sc in enumerate(selected_scenes):
+        beat_num = b_idx + 1
+        # Ringkas narasi agar total 4 beat berdurasi ~46-54 detik (< 60 detik syarat mutlak YouTube Shorts)
+        raw_narr = str(sc.get("narration_text", "")).strip()
+        sents = [s.strip() for s in re.split(r"(?<=[.!?])\s+", raw_narr) if s.strip()]
+        if b_idx == 0:
+            short_narr = " ".join(sents[:2]) if len(sents) >= 2 else raw_narr
+        elif b_idx == len(selected_scenes) - 1:
+            short_narr = (
+                f"{sents[0] if sents else ''} Tonton video lengkapnya dan klik Subscribe channel Islamic K1! "
+                f"Wassalamu'alaikum warahmatullahi wabarakatuh."
+            )
+        else:
+            short_narr = " ".join(sents[:2]) if len(sents) >= 2 else raw_narr
+
+        words_n = short_narr.split()
+        if len(words_n) > 29:
+            short_narr = " ".join(words_n[:28]) + "."
+
+        vo_mp3 = os.path.join(work_dir, f"short_b{beat_num}_vo.mp3")
+        mix_mp3 = os.path.join(work_dir, f"short_b{beat_num}.mp3")
+        b_dur = synthesize_tts_audio(short_narr, vo_mp3, voice_gender=voice_gender)
+        b_dur = min(13.8, max(6.0, b_dur))
+
+        st_weights = [0.22, 0.38, 0.40]
+        st_durs = [max(1.2, b_dur * w) for w in st_weights]
+        st_durs[2] = max(1.0, b_dur - sum(st_durs[:2]))
+
+        sfx_wav = os.path.join(work_dir, f"short_b{beat_num}_sfx.wav")
+        if _generate_subtle_halal_sfx_wav(b_dur, st_durs, sfx_wav) and os.path.exists(sfx_wav):
+            try:
+                subprocess.run(
+                    [
+                        "ffmpeg", "-y", "-i", vo_mp3, "-i", sfx_wav,
+                        "-filter_complex", "[0:a]volume=1.0[vo];[1:a]volume=0.32[sfx];[vo][sfx]amix=inputs=2:duration=first:dropout_transition=0[aout]",
+                        "-map", "[aout]", "-c:a", "libmp3lame", "-b:a", "192k", "-ar", "44100", "-ac", "2", mix_mp3,
+                    ],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+                )
+            except Exception:
+                shutil.copy2(vo_mp3, mix_mp3)
+        else:
+            shutil.copy2(vo_mp3, mix_mp3)
+
+        theme_name = str(sc.get("theme", "emerald_gold")).lower()
+        theme = SCENE_THEMES.get(theme_name, SCENE_THEMES["emerald_gold"])
+        m_style = select_motion_format_style(sc, b_idx, topic_title)
+        acc_r, acc_g, acc_b = theme["accent"]
+        img1_p = str(sc.get("_local_image_path", "")).strip()
+        img2_p = str(sc.get("_local_image2_path") or img1_p).strip()
+        headline_s = str(sc.get("headline", topic_title)).upper().strip()
+        bullets_s = list(sc.get("bullet_points", []))[:3]
+        while len(bullets_s) < 3:
+            bullets_s.append("Ilmu bermanfaat untuk keluarga Muslim.")
+
+        st_pngs: List[str] = []
+        for st_i in range(3):
+            png_p = os.path.join(work_dir, f"short_b{beat_num}_st{st_i}.png")
+            base = Image.new("RGBA", (W, H), theme["bg_top"] + (255,))
+            gdraw = ImageDraw.Draw(base)
+            for y in range(0, H, 6):
+                t = y / float(H)
+                r = int(theme["bg_top"][0] * (1 - t) + theme["bg_bottom"][0] * t)
+                g = int(theme["bg_top"][1] * (1 - t) + theme["bg_bottom"][1] * t)
+                b = int(theme["bg_top"][2] * (1 - t) + theme["bg_bottom"][2] * t)
+                gdraw.rectangle([0, y, W, y + 6], fill=(r, g, b, 255))
+
+            if img1_p and os.path.exists(img1_p):
+                try:
+                    bg_im = Image.open(img1_p).convert("RGB").resize((W, H), Image.Resampling.BILINEAR)
+                    bg_im = bg_im.filter(ImageFilter.GaussianBlur(radius=22))
+                    bg_im = ImageEnhance.Brightness(bg_im).enhance(0.24)
+                    base = Image.blend(base.convert("RGB"), bg_im, alpha=0.35).convert("RGBA")
+                except Exception:
+                    pass
+
+            ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            od = ImageDraw.Draw(ov)
+            od.rounded_rectangle([24, 24, W - 24, H - 24], radius=28, outline=(acc_r, acc_g, acc_b, 110), width=3)
+
+            # Header 9:16 (Area kanan atas x > 860 bersih untuk Logo Islamic K1)
+            b_font = _load_bold_font(24, font_path)
+            od.rounded_rectangle([54, 72, 340, 126], radius=14, fill=theme["badge_bg"] + (255,))
+            od.text((74, 85), f"SHORTS 0{beat_num} / 04", font=b_font, fill=theme["badge_text"] + (255,))
+            od.rounded_rectangle([358, 72, 830, 126], radius=14, fill=(6, 24, 18, 220), outline=theme["accent"] + (220,), width=2)
+            od.text((380, 86), f"🎬 {m_style.upper()[:22]}", font=_load_bold_font(21, font_path), fill=theme["accent"] + (255,))
+
+            # Judul Besar Vertikal
+            h_font = _load_bold_font(44, font_path)
+            for l_i, h_line in enumerate(textwrap.wrap(headline_s, width=22)[:2]):
+                _draw_text_with_3d_stroke(
+                    draw=od, pos=(56, 152 + l_i * 54), text=h_line, font=h_font,
+                    fill=(255, 255, 255, 255), stroke_fill=(4, 16, 12, 255), stroke_width=6, shadow_offset=4,
+                )
+
+            # Showcase 2 Gambar Internet Vertikal (y: 285..895) + Pointer Callout `label()`
+            zf_a = 1.04 + st_i * 0.05
+            zf_b = 1.18 - st_i * 0.04
+            _paste_zoomed_rounded_photo(
+                base, od, img1_p, (56, 285, 968, 460), zf_a, ((st_i - 1) * 10, 0),
+                theme["accent"] + (255,), theme["card_bg"], f"VISUAL UTAMA • {headline_s[:24]}", font_path,
+            )
+            _paste_zoomed_rounded_photo(
+                base, od, img2_p, (580, 625, 444, 255), zf_b, (-(st_i - 1) * 8, 0),
+                (255, 255, 255, 230), theme["card_bg"], f"DOKUMENTASI #{beat_num:02d}", font_path,
+            )
+            if st_i >= 1:
+                _draw_motion_format_pointer_label(
+                    od, (340, 480), (410, 365), 455, str(sc.get("pointer_label") or headline_s[:20]).upper(), theme["accent"], font_path
+                )
+
+            # Kartu Poin Vertikal (y: 915..1435)
+            c_font = _load_bold_font(30, font_path)
+            n_font = _load_bold_font(34, font_path)
+            for idx_p in range(3):
+                cy = 915 + idx_p * 172
+                is_act = st_i >= idx_p
+                od.rounded_rectangle(
+                    [56, cy, W - 56, cy + 150], radius=22,
+                    fill=theme["card_bg"] + (242 if is_act else 145,),
+                    outline=theme["accent"] + (255,) if st_i == idx_p else (255, 255, 255, 110),
+                    width=4 if st_i == idx_p else 2,
+                )
+                od.rounded_rectangle([80, cy + 26, 168, cy + 124], radius=16, fill=theme["badge_bg"] + (255,))
+                od.text((100, cy + 52), f"0{idx_p + 1}", font=n_font, fill=theme["badge_text"] + (255,))
+                for l_i, ln in enumerate(textwrap.wrap(str(bullets_s[idx_p]), width=31)[:2]):
+                    od.text((192, cy + (52 if len(textwrap.wrap(str(bullets_s[idx_p]), width=31)) == 1 else 32 + l_i * 42)), ln, font=c_font, fill=(255, 255, 255, 255))
+
+            # Subtitle Aktif 9:16 di Zona Aman (y: 1485..1585)
+            s_words = short_narr.split()
+            if s_words:
+                ch_len = max(1, (len(s_words) + 2) // 3)
+                sub_part = " ".join(s_words[st_i * ch_len : (st_i + 1) * ch_len + 2])
+                od.rounded_rectangle([56, 1485, W - 56, 1585], radius=26, fill=(3, 14, 11, 238), outline=theme["accent"] + (230,), width=3)
+                sub_f = _load_bold_font(28, font_path)
+                for l_i, s_ln in enumerate(textwrap.wrap(f"🗣️ {sub_part}", width=34)[:2]):
+                    od.text((84, 1502 + l_i * 36), s_ln, font=sub_f, fill=theme["accent"] + (255,))
+
+            # Kotak Hikmah & Progress Bar Bawah (y: 1615..1790)
+            hbox = str(sc.get("highlight_box", "")).strip()
+            if hbox:
+                od.rounded_rectangle([56, 1612, W - 56, 1745], radius=20, fill=theme["highlight_bg"] + (240,), outline=theme["accent"] + (255,), width=3)
+                for l_i, h_ln in enumerate(textwrap.wrap(f'✨ "{hbox}"', width=38)[:3]):
+                    od.text((80, 1628 + l_i * 34), h_ln, font=_load_bold_font(24, font_path), fill=theme["accent_soft"] + (255,))
+
+            prog_f = min(1.0, ((b_idx) + (st_i + 1) / 3.0) / 4.0)
+            od.rounded_rectangle([56, 1775, W - 56, 1793], radius=9, fill=(255, 255, 255, 45))
+            od.rounded_rectangle([56, 1775, 56 + max(28, int((W - 112) * prog_f)), 1793], radius=9, fill=theme["accent"] + (255,))
+            od.text((56, 1810), "ISLAMIC K1 • YOUTUBE SHORTS EDUKASI", font=_load_bold_font(22, font_path), fill=(255, 255, 255, 210))
+
+            Image.alpha_composite(base, ov).convert("RGB").save(png_p, "PNG")
+            st_pngs.append(png_p)
+
+        concat_s = os.path.join(work_dir, f"short_b{beat_num}_frames.txt")
+        with open(concat_s, "w", encoding="utf-8") as cf:
+            for st_i, p_str in enumerate(st_pngs):
+                cf.write(f"file '{p_str.replace(chr(92), '/')}'\n")
+                cf.write(f"duration {st_durs[st_i]:.3f}\n")
+            cf.write(f"file '{st_pngs[-1].replace(chr(92), '/')}'\n")
+
+        b_mp4 = os.path.join(work_dir, f"short_b{beat_num}_clip.mp4")
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_s, "-i", mix_mp3,
+                "-vf", "fps=30,scale=1080:1920,setsar=1,format=yuv420p,fade=t=in:st=0:d=0.25",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+                "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", "-shortest", b_mp4,
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+        )
+        beat_clips.append(b_mp4)
+
+    all_s_txt = os.path.join(work_dir, "all_shorts_concat.txt")
+    with open(all_s_txt, "w", encoding="utf-8") as af:
+        for bc in beat_clips:
+            af.write(f"file '{bc.replace(chr(92), '/')}'\n")
+
+    raw_short_mp4 = os.path.join(work_dir, "raw_shorts_9x16.mp4")
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", all_s_txt, "-c", "copy", raw_short_mp4],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+    )
+
+    final_short_mp4 = os.path.join(work_dir, "final_shorts_islamick1.mp4")
+    if logo_path and os.path.exists(logo_path):
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", raw_short_mp4, "-i", logo_path,
+                "-filter_complex", "[1:v]scale=130:-1[lg];[0:v][lg]overlay=W-w-36:42:format=auto,format=yuv420p[vout]",
+                "-map", "[vout]", "-map", "0:a", "-t", "57.5",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-c:a", "copy", final_short_mp4,
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+        )
+    else:
+        shutil.copy2(raw_short_mp4, final_short_mp4)
+
+    return final_short_mp4, get_video_duration(final_short_mp4)

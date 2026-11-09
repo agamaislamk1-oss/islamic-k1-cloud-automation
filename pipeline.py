@@ -1046,6 +1046,60 @@ def process_google_form_explainer_queue(
                     except Exception as mv_err:
                         print(f"[PERINGATAN] Gagal memindahkan video ke {DRIVE_DONE_FOLDER}: {mv_err}")
 
+                # Unggah Otomatis Versi Vertikal 9:16 (YouTube Shorts <= 60 Detik) jika tersedia!
+                shorts_path = pkg.get("shorts_video_path", "")
+                if shorts_path and os.path.exists(shorts_path):
+                    try:
+                        youtube, drive = get_google_services()
+                        shorts_drive_name = f"Shorts 9x16 - {safe_t} ({safe_a}).mp4"
+                        sh_media_drive = MediaFileUpload(shorts_path, mimetype="video/mp4", resumable=True)
+                        drive.files().create(
+                            body={"name": shorts_drive_name, "parents": [done_id]},
+                            media_body=sh_media_drive,
+                            fields="id",
+                        ).execute(num_retries=3)
+                        del sh_media_drive
+
+                        shorts_pub_iso = compute_next_prime_time_utc(
+                            recommended_slot="SIANG",
+                            last_scheduled_iso=history_data.get("last_scheduled_iso"),
+                        )
+                        shorts_title = pkg.get("shorts_title", f"{title[:68]} #Shorts | Islamic K1")[:100]
+                        shorts_desc = f"{pkg.get('shorts_description', full_description)}\n\n[Ref:{ref_tag}_SHORTS]"[:4900]
+                        shorts_body = {
+                            "snippet": {
+                                "title": shorts_title,
+                                "description": shorts_desc,
+                                "tags": (pkg.get("tags", ["IslamicK1", "Shorts"])[:12] + ["Shorts", "YouTubeShorts", "IslamicK1"]),
+                                "categoryId": "27",
+                                "defaultLanguage": "id",
+                                "defaultAudioLanguage": "id",
+                            },
+                            "status": {
+                                "privacyStatus": "private",
+                                "publishAt": shorts_pub_iso,
+                                "selfDeclaredMadeForKids": False,
+                                "containsSyntheticMedia": True,
+                                "embeddable": True,
+                                "publicStatsViewable": True,
+                            },
+                        }
+                        print(f"[YOUTUBE SHORTS 9:16] Mengunggah versi Shorts: '{shorts_title}' (Jadwal: {shorts_pub_iso})...")
+                        sh_media_yt = MediaFileUpload(shorts_path, mimetype="video/mp4", chunksize=10 * 1024 * 1024, resumable=True)
+                        sh_req = youtube.videos().insert(part="snippet,status", body=shorts_body, media_body=sh_media_yt)
+                        sh_resp = None
+                        while sh_resp is None:
+                            _, sh_resp = sh_req.next_chunk(num_retries=5)
+                        del sh_req
+                        del sh_media_yt
+                        sh_vid_id = sh_resp["id"]
+                        print(f"[YOUTUBE SHORTS 9:16] Berhasil diunggah! Link Shorts: https://youtube.com/shorts/{sh_vid_id}")
+                        history_data["last_scheduled_iso"] = shorts_pub_iso
+                        history_data[" processed_form_requests" if False else "processed_form_requests"][norm_key]["shorts_video_id"] = sh_vid_id
+                        history_file_id = save_upload_history(drive, root_id, history_data, history_file_id)
+                    except Exception as sh_up_err:
+                        print(f"[PERINGATAN SHORTS] Upload YouTube Shorts dilewati sementara ({str(sh_up_err)[:100]}).")
+
                 if drive_file_id:
                     try:
                         move_drive_file(drive, drive_file_id, form_queue_id, done_id)
