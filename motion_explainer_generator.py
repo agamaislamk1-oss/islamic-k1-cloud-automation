@@ -99,6 +99,47 @@ SCENE_THEMES: Dict[str, Dict[str, Tuple[int, int, int]]] = {
     },
 }
 
+# 7 Gaya Visual Sinematik dari Motion Format v2 (Integrasi E:\Motion Course\motion-format)
+MOTION_FORMAT_STYLES: Dict[str, str] = {
+    "isometrik-dibongkar": "3D isometric cutaway diagram illustration, glowing technical blueprint lines, cross-section layers, clean dark studio lighting, no text",
+    "sejarah-3d": "cinematic 3D historical architecture and Islamic civilization scene, warm golden sunbeams, atmospheric mist, epic lighting, no text",
+    "tubuh-anime": "vibrant Makoto Shinkai anime style educational illustration, glowing biological and natural particles, twilight sky gradient, no text",
+    "dunia-2d": "artistic textured 2D storybook illustration, warm watercolor and classic engraving style, soft paper grain, rich narrative feel, no text",
+    "kartun-cel": "bright 2D cel-shaded cartoon educational illustration, bold clean outlines, expressive visual storytelling, vibrant colors, no text",
+    "peta-relief": "3D cinematic topographic relief map, glowing route path and location marker, elevated terrain contours, dramatic lighting, no text",
+    "promo-produk": "modern 3D spotlight hero educational showcase, floating geometric accents, high-contrast emerald and gold studio lighting, no text",
+}
+
+
+def select_motion_format_style(scene: Dict[str, Any], scene_idx: int, topic_title: str) -> str:
+    """Memilih salah satu dari 7 gaya visual Motion Format v2 secara cerdas & bervariasi antar-scene."""
+    raw = str(scene.get("motion_style", "")).strip().lower()
+    if raw in MOTION_FORMAT_STYLES:
+        return raw
+    text_blob = f"{topic_title} {scene.get('headline', '')} {scene.get('chapter_title', '')} {scene.get('narration_text', '')}".lower()
+    if scene_idx == 9:
+        return "promo-produk"
+    if any(k in text_blob for k in ["peta", "wilayah", "negeri", "hijrah", "jalur", "perjalanan", "arab", "indonesia", "bumi", "ketinggian", "benua"]):
+        cand = "peta-relief"
+    elif any(k in text_blob for k in ["mesin", "cara kerja", "gaya", "sayap", "teknologi", "fisika", "struktur", "komponen", "kemudi", "rumus"]):
+        cand = "isometrik-dibongkar"
+    elif any(k in text_blob for k in ["sejarah", "kisah", "sahabat", "ulama", "nabi", "rasul", "masjid", "peradaban", "abad", "habibie", "ibnu"]):
+        cand = "sejarah-3d"
+    elif any(k in text_blob for k in ["tubuh", "hati", "otak", "kesehatan", "biologi", "darah", "napas", "jiwa", "tidur", "makanan"]):
+        cand = "tubuh-anime"
+    elif any(k in text_blob for k in ["anak", "adik", "pelajar", "tips", "adab", "doa", "sehari-hari", "keluarga", "praktik"]):
+        cand = "kartun-cel"
+    elif any(k in text_blob for k in ["ayat", "surat", "hikmah", "makna", "tafsir", "burung", "alam", "langit"]):
+        cand = "dunia-2d"
+    else:
+        style_keys = list(MOTION_FORMAT_STYLES.keys())
+        cand = style_keys[scene_idx % len(style_keys)]
+    # Variasikan jika kebetulan sama dengan indeks urutan agar 10 scene selalu dinamis
+    style_keys = list(MOTION_FORMAT_STYLES.keys())
+    if scene_idx % 2 == 1 and cand == style_keys[(scene_idx - 1) % len(style_keys)]:
+        cand = style_keys[(scene_idx + 2) % len(style_keys)]
+    return cand
+
 
 def _load_regular_font(size: int, fallback_font_path: str = "") -> ImageFont.FreeTypeFont:
     candidates = [
@@ -647,6 +688,8 @@ ATURAN WAJIB NASKAH & VIDEO (JANGAN DILANGGAR):
    - `bullet_points`: Tepat **3 poin ringkas** (masing-masing 5–9 kata) yang akan dimunculkan satu per satu secara animasi (*kinetic reveal*) seiring narator berbicara.
    - `highlight_box`: 1 kalimat kutipan dalil Al-Qur'an/Hadits, fakta kunci, atau hikmah utama (10–18 kata) untuk ditampilkan di kotak emas bagian bawah layar.
    - `image_prompt`: Deskripsi visual spesifik dalam **Bahasa Inggris** (15–25 kata) yang menggambarkan persis apa yang sedang dibahas pada scene tersebut untuk digenerate menjadi gambar ilustrasi 3D edukatif (contoh: `"3D Pixar style educational illustration of an airplane wing showing blue airflow arrows lifting the aircraft in bright sky, no text"`).
+   - `motion_style`: Pilih salah satu dari **7 Gaya Visual Motion Format v2** secara bervariasi antar-scene sesuai isi adegan: `"isometrik-dibongkar"` (cara kerja/sains/teknologi), `"sejarah-3d"` (sejarah Islam/ulama/masjid/kisah), `"tubuh-anime"` (kesehatan/biologi/jiwa/alam), `"dunia-2d"` (narasi kitab/hikmah/lukisan), `"kartun-cel"` (edukasi anak/adab/praktik), `"peta-relief"` (geografi/jalur/wilayah), `"promo-produk"` (kesimpulan/spotlight).
+   - `pointer_label`: Label penunjuk objek pendek (2–4 kata kapital, misal `"GAYA ANGKAT AIRFOIL"`, `"JEJAK PERADABAN"`, `"INTI HIKMAH AYAT"`) untuk fitur pointer titik + garis penunjuk di atas ilustrasi.
    - `theme`: Pilih salah satu secara bervariasi antar-scene: `"emerald_gold"`, `"royal_teal"`, `"midnight_amber"`, `"deep_ocean"`, `"warm_emerald"`.
    - `icon_type`: Pilih salah satu ikon yang paling cocok dengan isi scene: `"mosque"`, `"book"`, `"star"`, `"heart"`, `"lightbulb"`, `"shield"`, `"compass"`, `"check"`, `"sparkle"`, `"plane"`.
 5. **Metadata YouTube Lengkap**:
@@ -1034,14 +1077,17 @@ def fetch_or_create_scene_illustration(
     out_jpg = os.path.join(work_dir, f"scene_{scene_num:02d}_illust.jpg")
     headline = str(scene.get("headline", topic_title)).strip()
     chapter = str(scene.get("chapter_title", topic_title)).strip()
+    m_style = select_motion_format_style(scene, scene_num - 1, topic_title)
+    scene["motion_style"] = m_style
+    style_recipe = MOTION_FORMAT_STYLES.get(m_style, MOTION_FORMAT_STYLES["isometrik-dibongkar"])
     raw_prompt = str(scene.get("image_prompt", "")).strip()
     if not raw_prompt:
         raw_prompt = (
-            f"3D Pixar Disney style educational illustration explaining {headline} ({chapter}) "
-            f"about {topic_title} for {target_audience}, vibrant colors, clean composition, cinematic lighting, no text"
+            f"Educational visual explaining {headline} ({chapter}) "
+            f"about {topic_title} for {target_audience}, {style_recipe}"
         )
     else:
-        raw_prompt = f"{raw_prompt}, vibrant 3D educational illustration, clean composition, no text"
+        raw_prompt = f"{raw_prompt}, {style_recipe}"
 
     img_loaded = False
     seed_val = 100 + scene_num * 37
@@ -1593,6 +1639,8 @@ def build_complete_explainer_package(
             remotion_scenes = []
             for idx, sc in enumerate(scenes):
                 c_dur = get_video_duration(scene_clips[idx])
+                m_style = select_motion_format_style(sc, idx, topic_title)
+                p_label = str(sc.get("pointer_label") or sc.get("headline") or f"FOKUS SCENE {idx + 1}").upper()[:28]
                 remotion_scenes.append(
                     {
                         "scene_number": idx + 1,
@@ -1600,6 +1648,9 @@ def build_complete_explainer_package(
                         "headline": str(sc.get("headline", topic_title)),
                         "bullet_points": list(sc.get("bullet_points", []))[:3],
                         "highlight_box": str(sc.get("highlight_box", "")),
+                        "narration_text": str(sc.get("narration_text", "")),
+                        "motion_style": m_style,
+                        "pointer_label": p_label,
                         "image_url": str(sc.get("image_url", "")),
                         "icon_type": str(sc.get("icon_type", "mosque")),
                         "theme_name": str(sc.get("theme") or sc.get("theme_name") or theme_keys[idx % len(theme_keys)]),
