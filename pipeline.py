@@ -332,16 +332,27 @@ def fetch_existing_youtube_videos(youtube, cached_videos: Optional[List[Dict[str
     return all_videos
 
 
+def _verify_youtube_video_still_exists(youtube, video_id: str) -> bool:
+    """Memastikan video_id benar-benar masih ada di YouTube (tidak dihapus manual oleh pengguna)."""
+    if not youtube or not video_id:
+        return True
+    try:
+        res = youtube.videos().list(part="id", id=video_id).execute(num_retries=2)
+        return bool(res.get("items"))
+    except Exception:
+        return True
+
+
 def is_already_uploaded(
     drive_file: Dict[str, Any],
     history_data: Dict[str, Any],
     existing_yt_videos: List[Dict[str, str]],
+    youtube=None,
 ) -> Tuple[bool, str]:
     """
-    Pengecekan Anti-Duplikat 3 Lapis:
-    1. Cek File ID Google Drive & MD5 Checksum di riwayat upload.
-    2. Cek Nama File yang ternormalisasi di riwayat upload.
-    3. Cek kecocokan Nama File / kode referensi di seluruh daftar video yang sudah ada di YouTube Islamic K1.
+    Pengecekan Anti-Duplikat 3 Lapis + Verifikasi Eksistensi Nyata di YouTube:
+    Jika video tercatat di riwayat/cache namun ternyata sudah dihapus di YouTube,
+    maka riwayat lama otomatis dibersihkan agar video dapat diupload kembali!
     """
     file_id = drive_file["id"]
     file_name = drive_file["name"]
@@ -349,20 +360,50 @@ def is_already_uploaded(
     norm_name = normalize_key(file_name)
 
     uploaded_map = history_data.get("uploaded_files", {})
+    stale_keys = []
     for rec_key, rec_val in uploaded_map.items():
+        matched_reason = ""
         if rec_key == file_id:
-            return True, f"File ID {file_id} sudah tercatat di riwayat upload."
-        if md5_checksum and rec_val.get("md5Checksum") == md5_checksum:
-            return True, f"MD5 Checksum identik dengan video '{rec_val.get('original_name')}' yang sudah diupload."
-        if norm_name and normalize_key(rec_val.get("original_name", "")) == norm_name:
-            return True, f"Nama file '{file_name}' sudah pernah diupload sebelumnya."
+            matched_reason = f"File ID {file_id} sudah tercatat di riwayat upload."
+        elif md5_checksum and rec_val.get("md5Checksum") == md5_checksum:
+            matched_reason = f"MD5 Checksum identik dengan video '{rec_val.get('original_name')}' yang sudah diupload."
+        elif norm_name and normalize_key(rec_val.get("original_name", "")) == norm_name:
+            matched_reason = f"Nama file '{file_name}' sudah pernah diupload sebelumnya."
 
+        if matched_reason:
+            vid_id = rec_val.get("youtube_video_id", "")
+            if vid_id and not _verify_youtube_video_still_exists(youtube, vid_id):
+                print(f"[RE-UPLOAD] Video '{file_name}' ({vid_id}) tercatat di riwayat tapi sudah tidak ada di YouTube. Memproses ulang!")
+                stale_keys.append(rec_key)
+                continue
+            return True, matched_reason
+
+    for sk in stale_keys:
+        uploaded_map.pop(sk, None)
+
+    stale_yt_ids = set()
     for yt_vid in existing_yt_videos:
         yt_norm_title = normalize_key(yt_vid["title"])
+        matched_yt = False
+        reason_yt = ""
         if len(norm_name) >= 6 and (norm_name == yt_norm_title or norm_name in yt_norm_title):
-            return True, f"Sudah ada di channel YouTube dengan judul '{yt_vid['title']}' ({yt_vid['video_id']})."
-        if md5_checksum and f"[Ref:{md5_checksum[:10]}]" in yt_vid.get("description", ""):
-            return True, f"Checksum referensi ditemukan di video YouTube {yt_vid['video_id']}."
+            matched_yt = True
+            reason_yt = f"Sudah ada di channel YouTube dengan judul '{yt_vid['title']}' ({yt_vid['video_id']})."
+        elif md5_checksum and f"[Ref:{md5_checksum[:10]}]" in yt_vid.get("description", ""):
+            matched_yt = True
+            reason_yt = f"Checksum referensi ditemukan di video YouTube {yt_vid['video_id']}."
+
+        if matched_yt:
+            vid_id = yt_vid.get("video_id", "")
+            if vid_id and not _verify_youtube_video_still_exists(youtube, vid_id):
+                print(f"[RE-UPLOAD] Cache video '{yt_vid.get('title')}' ({vid_id}) sudah dihapus dari YouTube. Memproses ulang!")
+                stale_yt_ids.add(vid_id)
+                continue
+            return True, reason_yt
+
+    if stale_yt_ids:
+        existing_yt_videos[:] = [v for v in existing_yt_videos if v.get("video_id") not in stale_yt_ids]
+        history_data["cached_youtube_videos"] = existing_yt_videos
 
     return False, ""
 
@@ -1114,7 +1155,7 @@ def run_queue_pipeline():
 
         target_file = None
         for candidate in queue_files:
-            duplicate, reason = is_already_uploaded(candidate, history_data, existing_yt_videos)
+            duplicate, reason = is_already_uploaded(candidate, history_data, existing_yt_videos, youtube=youtube)
             if duplicate:
                 print(f"[SKIP DUPLIKAT] '{candidate['name']}' dilewati karena: {reason}")
                 move_drive_file(drive, candidate["id"], queue_id, done_id)

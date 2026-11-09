@@ -1056,6 +1056,192 @@ def _draw_vector_icon(draw: ImageDraw.ImageDraw, cx: int, cy: int, radius: int, 
         draw.line([(cx - 18, cy + 2), (cx - 4, cy + 16), (cx + 22, cy - 14)], fill=c_rgba, width=7)
 
 
+_USED_INTERNET_IMAGE_URLS: set = set()
+
+
+def _extract_english_search_queries(scene: Dict[str, Any], topic_title: str) -> List[str]:
+    """Menyusun daftar kata kunci pencarian gambar internet (Inggris & Indonesia) yang relevan dengan topik & scene."""
+    queries: List[str] = []
+    raw_prompt = str(scene.get("image_prompt", "")).strip()
+    headline = str(scene.get("headline", "")).strip()
+    chapter = str(scene.get("chapter_title", "")).strip()
+
+    # Bersihkan kata-kata instruksi gaya dari image_prompt untuk mendapat inti objek visual dalam bahasa Inggris
+    if raw_prompt:
+        cleaned = re.sub(
+            r"(?i)\b(3d|pixar|disney|style|educational|illustration|explaining|vibrant|colors|clean|composition|cinematic|lighting|no text|warm|isometric|cutaway|diagram|cartoon|cel-shaded|anime|makoto shinkai|storybook|watercolor|of|showing|about)\b",
+            " ",
+            raw_prompt,
+        )
+        cleaned = re.sub(r"[^a-zA-Z0-9\s-]", " ", cleaned)
+        words = [w for w in cleaned.split() if len(w) > 2]
+        if words:
+            queries.append(" ".join(words[:5]))
+            if len(words) > 3:
+                queries.append(" ".join(words[:3]))
+
+    # Kamus cepat istilah populer Islami/Sains/Sejarah agar pencarian Wikimedia/Wikipedia sangat akurat
+    id_to_en_map = {
+        "thariq bin ziyad": "Tariq ibn Ziyad Andalusia Gibraltar",
+        "andalusia": "Alhambra Cordoba Islamic Spain",
+        "gibraltar": "Rock of Gibraltar Strait",
+        "muawiyah": "Umayyad Mosque Damascus Caliphate",
+        "pesawat": "Airplane aerodynamics wing flight",
+        "sayap": "Airfoil wing lift aerodynamics",
+        "mesin jet": "Turbofan jet engine aircraft",
+        "habibie": "B. J. Habibie N-250 aircraft",
+        "pelangi": "Rainbow spectrum light refraction raindrops",
+        "burung": "Bird flight wings sky",
+        "soekarno": "Sukarno Indonesia proclamation",
+        "riyadhus shalihin": "Islamic calligraphy Quran manuscript mosque",
+        "masjid": "Grand Mosque Islamic architecture",
+        "al-quran": "Quran open manuscript calligraphy",
+        "sedekah": "Islamic charity Sadaqah helping",
+        "shalat": "Muslim prayer mosque sujud",
+    }
+    combined_id = f"{topic_title} {headline} {chapter}".lower()
+    for k_id, v_en in id_to_en_map.items():
+        if k_id in combined_id:
+            queries.insert(0, v_en)
+
+    if headline:
+        queries.append(f"{topic_title} {headline}")
+    queries.append(topic_title)
+    return list(dict.fromkeys([q.strip() for q in queries if q.strip()]))
+
+
+def _search_wikimedia_and_openverse_urls(queries: List[str], max_results: int = 6) -> List[str]:
+    """
+    Mencari gambar nyata berlisensi bebas (Public Domain / Creative Commons — 100% Aman & Legal untuk YouTube)
+    dari Wikimedia Commons, Wikipedia, dan Openverse API tanpa memerlukan API Key berbayar.
+    """
+    import urllib.parse
+    import urllib.request
+
+    found_urls: List[str] = []
+    headers = {"User-Agent": "IslamicK1EducationalBot/2.0 (https://www.youtube.com/@islamick1832; educational)"}
+
+    for q in queries[:4]:
+        if len(found_urls) >= max_results:
+            break
+        # 1. Wikimedia Commons Search API (Gambar foto, lukisan sejarah, diagram sains, peta)
+        try:
+            enc_q = urllib.parse.quote(f"filetype:bitmap {q}")
+            wiki_url = (
+                f"https://commons.wikimedia.org/w/api.php?action=query&generator=search"
+                f"&gsrsearch={enc_q}&gsrnamespace=6&gsrlimit=6&prop=imageinfo&iiprop=url|dimensions"
+                f"&iiurlwidth=800&format=json"
+            )
+            req = urllib.request.Request(wiki_url, headers=headers)
+            data = json.loads(urllib.request.urlopen(req, timeout=8).read().decode("utf-8", errors="ignore"))
+            pages = data.get("query", {}).get("pages", {})
+            for _, pinfo in pages.items():
+                ii = (pinfo.get("imageinfo") or [{}])[0]
+                u = ii.get("thumburl") or ii.get("url") or ""
+                w = int(ii.get("width") or 800)
+                h = int(ii.get("height") or 600)
+                if u and w >= 350 and h >= 250 and not u.lower().endswith((".svg", ".gif", ".tif", ".pdf")):
+                    if u not in _USED_INTERNET_IMAGE_URLS and u not in found_urls:
+                        found_urls.append(u)
+        except Exception:
+            pass
+
+        # 2. Openverse Creative Commons API (Jutaan foto & ilustrasi CC0/CC-BY bebas hak cipta)
+        if len(found_urls) < max_results:
+            try:
+                enc_ov = urllib.parse.quote(q)
+                ov_url = f"https://api.openverse.org/v1/images/?q={enc_ov}&page_size=5"
+                req = urllib.request.Request(ov_url, headers=headers)
+                ov_data = json.loads(urllib.request.urlopen(req, timeout=8).read().decode("utf-8", errors="ignore"))
+                for item in ov_data.get("results", []):
+                    u = item.get("thumbnail") or item.get("url") or ""
+                    if u and not u.lower().endswith((".svg", ".gif")):
+                        if u not in _USED_INTERNET_IMAGE_URLS and u not in found_urls:
+                            found_urls.append(u)
+            except Exception:
+                pass
+
+    return found_urls
+
+
+def _download_and_prepare_image(url: str, out_jpg: str, size: Tuple[int, int] = (640, 480)) -> bool:
+    """Mengunduh URL gambar dari internet dan menyimpannya sebagai JPEG bersih berukuran seragam."""
+    import io
+    import urllib.request
+
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "IslamicK1EducationalBot/2.0 (https://www.youtube.com/@islamick1832; educational)",
+                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            },
+        )
+        raw_bytes = urllib.request.urlopen(req, timeout=16).read()
+        if len(raw_bytes) > 3500:
+            im = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+            # Center crop ke rasio target agar tidak gepeng
+            tw, th = size
+            src_w, src_h = im.size
+            target_ratio = tw / float(th)
+            src_ratio = src_w / float(max(1, src_h))
+            if src_ratio > target_ratio:
+                new_w = int(src_h * target_ratio)
+                left = (src_w - new_w) // 2
+                im = im.crop((left, 0, left + new_w, src_h))
+            else:
+                new_h = int(src_w / target_ratio)
+                top = (src_h - new_h) // 2
+                im = im.crop((0, top, src_w, top + new_h))
+            im = im.resize((tw, th), Image.Resampling.LANCZOS)
+            im.save(out_jpg, "JPEG", quality=88)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _create_rich_styled_fallback_image(
+    scene: Dict[str, Any],
+    topic_title: str,
+    font_path: str,
+    out_jpg: str,
+    variant: int = 1,
+) -> None:
+    """Membuat visual ilustrasi bergaya Motion Format v2 (Isometrik/Peta/Sejarah/Anime) jika offline."""
+    theme_name = str(scene.get("theme", "emerald_gold")).lower()
+    theme = SCENE_THEMES.get(theme_name, SCENE_THEMES["emerald_gold"])
+    m_style = str(scene.get("motion_style", "isometrik-dibongkar"))
+    headline = str(scene.get("headline", topic_title)).strip()
+    canvas = Image.new("RGBA", (640, 480), theme["bg_top"] + (255,))
+    cdraw = ImageDraw.Draw(canvas)
+    for y in range(0, 480, 4):
+        t = y / 480.0
+        c1 = theme["bg_top"] if variant == 1 else theme["card_bg"]
+        c2 = theme["card_bg"] if variant == 1 else theme["highlight_bg"]
+        r = int(c1[0] * (1 - t) + c2[0] * t)
+        g = int(c1[1] * (1 - t) + c2[1] * t)
+        b = int(c1[2] * (1 - t) + c2[2] * t)
+        cdraw.rectangle([0, y, 640, y + 4], fill=(r, g, b, 255))
+    acc = theme["accent"]
+    if m_style == "isometrik-dibongkar":
+        for i in range(-3, 10):
+            cdraw.line([(0, i * 60), (640, i * 60 + 180)], fill=acc + (45,), width=2)
+            cdraw.line([(i * 80, 0), (i * 80 - 160, 480)], fill=acc + (35,), width=2)
+    elif m_style == "peta-relief":
+        for rad in (60, 105, 150, 195, 240):
+            cdraw.ellipse([320 - int(rad * 1.3), 210 - rad, 320 + int(rad * 1.3), 210 + rad], outline=acc + (65,), width=3)
+    else:
+        for rad in (85, 135, 185, 235):
+            cdraw.ellipse([320 - rad, 200 - rad, 320 + rad, 200 + rad], outline=acc + (55,), width=3)
+    _draw_vector_icon(cdraw, cx=320, cy=185, radius=82, icon_type=str(scene.get("icon_type", "mosque")), color=acc)
+    cap_font = _load_bold_font(25, font_path)
+    wrapped = textwrap.wrap(headline.upper(), width=26)[:2]
+    for idx_l, line_s in enumerate(wrapped):
+        cdraw.text((54, 335 + idx_l * 36), line_s, font=cap_font, fill=(255, 255, 255, 245))
+    canvas.convert("RGB").save(out_jpg, "JPEG", quality=88)
+
+
 def fetch_or_create_scene_illustration(
     scene: Dict[str, Any],
     topic_title: str,
@@ -1064,81 +1250,150 @@ def fetch_or_create_scene_illustration(
     work_dir: str,
 ) -> Tuple[str, str]:
     """
-    Menghasilkan 1 gambar ilustrasi visual (640x480) yang menerangkan isi pembahasan pada scene tersebut (100% GRATIS):
-    - Prioritas 1: Free AI Image Generator (Pollinations Flux/SDXL Tanpa API Key) berdasarkan `image_prompt` atau `headline`.
-    - Prioritas 2: Ilustrasi Vektor Edukasi Prosedural beresolusi tinggi jika server gambar sedang sibuk.
-    Mengembalikan tuple: (local_image_path, data_uri_base64_jpeg) untuk dipakai langsung di Remotion & FFmpeg.
+    Menghasilkan 2 GAMBAR VISUAL BERBEDA per Scene (100% GRATIS & Aman Hak Cipta YouTube):
+    - Gambar 1 (`_local_image_path` / `image_url`): Gambar nyata dari Internet (Wikimedia Commons / Wikipedia / Openverse CC)
+      yang sesuai dengan topik, atau AI Visual bergaya Motion Format v2.
+    - Gambar 2 (`_local_image2_path` / `image2_url`): Visual pendamping kedua (AI Ilustrasi 3D/Isometrik/Sejarah/Kartun
+      atau foto internet kedua) agar tampilan setiap scene kaya, hidup, dan tidak monoton!
     """
     import base64
     import urllib.parse
-    import urllib.request
 
     scene_num = int(scene.get("scene_number", 1))
-    out_jpg = os.path.join(work_dir, f"scene_{scene_num:02d}_illust.jpg")
+    out_jpg1 = os.path.join(work_dir, f"scene_{scene_num:02d}_illust1.jpg")
+    out_jpg2 = os.path.join(work_dir, f"scene_{scene_num:02d}_illust2.jpg")
     headline = str(scene.get("headline", topic_title)).strip()
     chapter = str(scene.get("chapter_title", topic_title)).strip()
     m_style = select_motion_format_style(scene, scene_num - 1, topic_title)
     scene["motion_style"] = m_style
     style_recipe = MOTION_FORMAT_STYLES.get(m_style, MOTION_FORMAT_STYLES["isometrik-dibongkar"])
+
+    # 1. Cari Gambar Nyata dari Internet (Wikimedia Commons & Openverse CC0/CC-BY)
+    search_queries = _extract_english_search_queries(scene, topic_title)
+    internet_urls = _search_wikimedia_and_openverse_urls(search_queries, max_results=6)
+
+    img1_ok = False
+    img2_ok = False
+
+    for u in internet_urls:
+        if not img1_ok:
+            if _download_and_prepare_image(u, out_jpg1):
+                _USED_INTERNET_IMAGE_URLS.add(u)
+                img1_ok = True
+                print(f"  [INTERNET IMAGE #1 SCENE {scene_num:02d}] Berhasil mengambil gambar nyata sesuai topik: {u[:65]}...")
+                continue
+        elif not img2_ok:
+            if _download_and_prepare_image(u, out_jpg2):
+                _USED_INTERNET_IMAGE_URLS.add(u)
+                img2_ok = True
+                print(f"  [INTERNET IMAGE #2 SCENE {scene_num:02d}] Berhasil mengambil gambar pendamping: {u[:65]}...")
+                break
+
+    # 2. Lengkapi dengan AI Visual Generator (Pollinations Flux/SDXL) sesuai 7 Gaya Motion Format v2
     raw_prompt = str(scene.get("image_prompt", "")).strip()
     if not raw_prompt:
-        raw_prompt = (
-            f"Educational visual explaining {headline} ({chapter}) "
-            f"about {topic_title} for {target_audience}, {style_recipe}"
-        )
+        raw_prompt = f"Educational visual explaining {headline} ({chapter}) about {topic_title}, {style_recipe}"
     else:
         raw_prompt = f"{raw_prompt}, {style_recipe}"
 
-    img_loaded = False
-    seed_val = 100 + scene_num * 37
+    seed_val = 200 + scene_num * 43
     encoded_p = urllib.parse.quote(raw_prompt[:280])
-    poll_url = f"https://image.pollinations.ai/prompt/{encoded_p}?width=640&height=480&nologo=true&seed={seed_val}"
+    poll_url1 = f"https://image.pollinations.ai/prompt/{encoded_p}?width=640&height=480&nologo=true&seed={seed_val}"
+    poll_url2 = f"https://image.pollinations.ai/prompt/{encoded_p}?width=640&height=480&nologo=true&seed={seed_val + 77}"
 
-    for attempt in range(2):
-        try:
-            req = urllib.request.Request(
-                poll_url,
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+    if not img1_ok:
+        img1_ok = _download_and_prepare_image(poll_url1, out_jpg1)
+    if not img2_ok:
+        img2_ok = _download_and_prepare_image(poll_url2, out_jpg2)
+
+    if not img1_ok:
+        _create_rich_styled_fallback_image(scene, topic_title, font_path, out_jpg1, variant=1)
+    if not img2_ok:
+        _create_rich_styled_fallback_image(scene, topic_title, font_path, out_jpg2, variant=2)
+
+    with open(out_jpg1, "rb") as bf1:
+        b64_1 = f"data:image/jpeg;base64,{base64.b64encode(bf1.read()).decode('ascii')}"
+    with open(out_jpg2, "rb") as bf2:
+        b64_2 = f"data:image/jpeg;base64,{base64.b64encode(bf2.read()).decode('ascii')}"
+
+    scene["_local_image2_path"] = out_jpg2
+    scene["image2_url"] = b64_2
+    return out_jpg1, b64_1
+
+
+def _paste_zoomed_rounded_photo(
+    base_img: Image.Image,
+    overlay_draw: ImageDraw.ImageDraw,
+    photo_path: str,
+    box: Tuple[int, int, int, int],
+    zoom_factor: float,
+    pan_xy: Tuple[int, int],
+    border_col: Tuple[int, int, int, int],
+    card_bg: Tuple[int, int, int],
+    caption_text: str = "",
+    font_path: str = "",
+) -> None:
+    """Menempelkan gambar dengan efek Ken Burns Zoom + Panning + Bingkai Bercahaya + Label."""
+    if not photo_path or not os.path.exists(photo_path):
+        return
+    try:
+        x1, y1, bw, bh = box
+        overlay_draw.rounded_rectangle(
+            [x1 - 5, y1 - 5, x1 + bw + 5, y1 + bh + 5],
+            radius=22,
+            fill=card_bg + (245,),
+            outline=border_col,
+            width=4,
+        )
+        im_src = Image.open(photo_path).convert("RGB")
+        zw, zh = max(bw + 20, int(bw * zoom_factor)), max(bh + 20, int(bh * zoom_factor))
+        im_zoomed = im_src.resize((zw, zh), Image.Resampling.LANCZOS)
+        px, py = pan_xy
+        left_c = max(0, min(zw - bw, (zw - bw) // 2 + px))
+        top_c = max(0, min(zh - bh, (zh - bh) // 2 + py))
+        im_cropped = im_zoomed.crop((left_c, top_c, left_c + bw, top_c + bh)).convert("RGBA")
+        base_img.paste(im_cropped, (x1, y1))
+        if caption_text:
+            c_font = _load_bold_font(18, font_path)
+            overlay_draw.rounded_rectangle(
+                [x1 + 10, y1 + bh - 42, x1 + bw - 10, y1 + bh - 8],
+                radius=10,
+                fill=(4, 20, 15, 225),
+                outline=border_col,
+                width=2,
             )
-            raw_bytes = urllib.request.urlopen(req, timeout=22).read()
-            if len(raw_bytes) > 4000:
-                with open(out_jpg, "wb") as f:
-                    f.write(raw_bytes)
-                # Pastikan ukuran tepat 640x480 RGB
-                im = Image.open(out_jpg).convert("RGB").resize((640, 480), Image.Resampling.LANCZOS)
-                im.save(out_jpg, "JPEG", quality=88)
-                img_loaded = True
-                break
-        except Exception as e:
-            print(f"  [INFO GAMBAR SCENE {scene_num:02d}] Percobaan AI Image #{attempt + 1} lewat ({str(e)[:70]}), menggunakan ilustrasi cadangan...")
-            time.sleep(1)
+            overlay_draw.text((x1 + 22, y1 + bh - 36), caption_text[:38], font=c_font, fill=(255, 250, 220, 255))
+    except Exception:
+        pass
 
-    if not img_loaded:
-        # Buat ilustrasi kanvas edukatif berwarna kaya jika internet gambar sedang lambat
-        theme_name = str(scene.get("theme", "emerald_gold")).lower()
-        theme = SCENE_THEMES.get(theme_name, SCENE_THEMES["emerald_gold"])
-        canvas = Image.new("RGBA", (640, 480), theme["bg_top"] + (255,))
-        cdraw = ImageDraw.Draw(canvas)
-        for y in range(0, 480, 4):
-            t = y / 480.0
-            r = int(theme["bg_top"][0] * (1 - t) + theme["card_bg"][0] * t)
-            g = int(theme["bg_top"][1] * (1 - t) + theme["card_bg"][1] * t)
-            b = int(theme["bg_top"][2] * (1 - t) + theme["card_bg"][2] * t)
-            cdraw.rectangle([0, y, 640, y + 4], fill=(r, g, b, 255))
-        acc = theme["accent"]
-        for rad in (90, 140, 190, 240):
-            cdraw.ellipse([320 - rad, 210 - rad, 320 + rad, 210 + rad], outline=acc + (55,), width=3)
-        _draw_vector_icon(cdraw, cx=320, cy=195, radius=84, icon_type=str(scene.get("icon_type", "mosque")), color=acc)
-        cap_font = _load_bold_font(26, font_path)
-        wrapped = textwrap.wrap(headline.upper(), width=26)[:2]
-        for idx_l, line_s in enumerate(wrapped):
-            cdraw.text((60, 340 + idx_l * 36), line_s, font=cap_font, fill=(255, 255, 255, 245))
-        canvas.convert("RGB").save(out_jpg, "JPEG", quality=88)
 
-    with open(out_jpg, "rb") as bf:
-        b64_str = base64.b64encode(bf.read()).decode("ascii")
-    data_uri = f"data:image/jpeg;base64,{b64_str}"
-    return out_jpg, data_uri
+def _draw_motion_format_pointer_label(
+    odraw: ImageDraw.ImageDraw,
+    target_xy: Tuple[int, int],
+    elbow_xy: Tuple[int, int],
+    end_x: int,
+    label_text: str,
+    accent_rgb: Tuple[int, int, int],
+    font_path: str,
+) -> None:
+    """Menggambar fitur khas Motion Format `label()` (Titik Bidik Bercahaya + Garis Siku Penunjuk + Pill Label)."""
+    tx, ty = target_xy
+    ex, ey = elbow_xy
+    acc = accent_rgb + (255,)
+    odraw.ellipse([tx - 16, ty - 16, tx + 16, ty + 16], outline=acc, width=3)
+    odraw.ellipse([tx - 7, ty - 7, tx + 7, ty + 7], fill=acc)
+    odraw.line([(tx, ty), (ex, ey), (end_x, ey)], fill=acc, width=4)
+    p_font = _load_bold_font(19, font_path)
+    pill_w = min(310, max(160, len(label_text) * 12 + 34))
+    px1 = end_x if end_x >= ex else (end_x - pill_w)
+    odraw.rounded_rectangle(
+        [px1, ey - 22, px1 + pill_w, ey + 22],
+        radius=11,
+        fill=(4, 20, 15, 238),
+        outline=acc,
+        width=3,
+    )
+    odraw.text((px1 + 14, ey - 12), f"🎯 {label_text[:24]}", font=p_font, fill=acc)
 
 
 def render_scene_stage_image(
@@ -1151,18 +1406,24 @@ def render_scene_stage_image(
     output_png_path: str,
 ) -> str:
     """
-    Merender 1 keyframe state (1920x1080) dari sebuah Scene Motion Grafis:
-    - stage_index = 0: Judul Utama, Header Babak, Ikon Vektor, & Progress Bar muncul
-    - stage_index = 1: Kartu Poin 1 muncul menyala
-    - stage_index = 2: Kartu Poin 1 + Poin 2 muncul menyala
-    - stage_index = 3: Kartu Poin 1 + Poin 2 + Poin 3 + Kotak Emas Dalil/Hikmah di bawah muncul lengkap!
-    Catatan: Area kanan atas (x: 1750..1900, y: 15..140) sengaja dibiarkan bersih untuk Logo Islamic K1.
+    Merender 1 keyframe state (1920x1080) dengan 5 TATA LETAK BERBEDA (Multi-Layout Motion Format v2)
+    + 2 Gambar Internet/Visual per Scene + Latar Belakang Foto Sinematik + Pointer Callout `label()`
+    + Subtitle Kinetik Sinkron Suara (`sub`) agar tampilan hidup, kaya, dan TIDAK MONOTON!
+    Area kanan atas (x: 1750..1900, y: 15..140) sengaja dibiarkan bersih untuk Logo Islamic K1.
     """
     W, H = 1920, 1080
+    scene_num = int(scene.get("scene_number", 1))
     theme_name = str(scene.get("theme", "emerald_gold")).lower()
     theme = SCENE_THEMES.get(theme_name, SCENE_THEMES["emerald_gold"])
+    m_style = select_motion_format_style(scene, scene_num - 1, topic_title)
+    acc_r, acc_g, acc_b = theme["accent"]
 
-    # 1. Buat latar belakang gradasi halus + ornamen geometris Islami/modern
+    illust1_path = str(scene.get("_local_image_path", "")).strip()
+    illust2_path = str(scene.get("_local_image2_path") or illust1_path).strip()
+    has_img1 = bool(illust1_path and os.path.exists(illust1_path))
+    has_img2 = bool(illust2_path and os.path.exists(illust2_path))
+
+    # 1. Latar Belakang Sinematik: Gradasi + Foto Topik yang Di-blur Halus (Parallax Depth)
     base = Image.new("RGBA", (W, H), theme["bg_top"] + (255,))
     grad_draw = ImageDraw.Draw(base)
     r1, g1, b1 = theme["bg_top"]
@@ -1174,218 +1435,302 @@ def render_scene_stage_image(
         b = int(b1 + (b2 - b1) * t)
         grad_draw.rectangle([0, y, W, y + 4], fill=(r, g, b, 255))
 
+    if has_img1:
+        try:
+            bg_photo = Image.open(illust1_path).convert("RGB").resize((W, H), Image.Resampling.BILINEAR)
+            bg_photo = bg_photo.filter(ImageFilter.GaussianBlur(radius=18))
+            bg_photo = ImageEnhance.Brightness(bg_photo).enhance(0.24)
+            base = Image.blend(base.convert("RGB"), bg_photo, alpha=0.32).convert("RGBA")
+        except Exception:
+            pass
+
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     odraw = ImageDraw.Draw(overlay)
 
-    # Ornamen lingkaran geometris lembut di sudut kiri bawah & kanan tengah
-    acc_r, acc_g, acc_b = theme["accent"]
-    for rad in (220, 300, 380):
-        odraw.ellipse([-120 - rad, H - 80 - rad, -120 + rad, H - 80 + rad], outline=(acc_r, acc_g, acc_b, 26), width=3)
-        odraw.ellipse([W - 180 - rad, 540 - rad, W - 180 + rad, 540 + rad], outline=(acc_r, acc_g, acc_b, 22), width=3)
+    # Ornamen Latar Khas 7 Gaya Motion Format v2
+    if m_style == "isometrik-dibongkar":
+        for g_i in range(0, W, 160):
+            odraw.line([(g_i, 240), (g_i - 180, H)], fill=(acc_r, acc_g, acc_b, 28), width=2)
+        for g_y in range(260, H, 120):
+            odraw.line([(0, g_y), (W, g_y + 140)], fill=(acc_r, acc_g, acc_b, 24), width=2)
+    elif m_style == "peta-relief":
+        for rad in (160, 240, 320, 400, 480):
+            odraw.ellipse([960 - int(rad * 1.5), 540 - rad, 960 + int(rad * 1.5), 540 + rad], outline=(acc_r, acc_g, acc_b, 34), width=3)
+    elif m_style == "sejarah-3d":
+        odraw.polygon([(220, 0), (580, 0), (980, H), (380, H)], fill=(acc_r, acc_g, acc_b, 18))
+        odraw.polygon([(880, 0), (1240, 0), (1680, H), (1080, H)], fill=(255, 255, 255, 14))
+    else:
+        for rad in (220, 300, 380):
+            odraw.ellipse([-120 - rad, H - 80 - rad, -120 + rad, H - 80 + rad], outline=(acc_r, acc_g, acc_b, 28), width=3)
+            odraw.ellipse([W - 180 - rad, 540 - rad, W - 180 + rad, 540 + rad], outline=(acc_r, acc_g, acc_b, 24), width=3)
 
-    # Bingkai tipis elegan
-    odraw.rounded_rectangle([28, 24, W - 28, H - 24], radius=24, outline=(acc_r, acc_g, acc_b, 95), width=2)
+    odraw.rounded_rectangle([28, 22, W - 28, H - 22], radius=24, outline=(acc_r, acc_g, acc_b, 105), width=2)
 
-    # 2. Header Bar Atas (Nomor Scene, Kategori Audience, & Progress Indikator)
-    scene_num = int(scene.get("scene_number", 1))
+    # 2. Header Bar Atas + Lencana Gaya Motion Format v2 (Area x > 1680 bersih untuk Logo Islamic K1)
     chapter_title = str(scene.get("chapter_title", topic_title)).strip()
+    badge_font = _load_bold_font(24, font_path)
+    small_font = _load_bold_font(21, font_path)
 
-    # Lencana Nomor Bagian di Kiri Atas
-    badge_font = _load_bold_font(26, font_path)
-    small_font = _load_regular_font(24, font_path)
+    odraw.rounded_rectangle([68, 44, 315, 94], radius=14, fill=theme["badge_bg"] + (255,), outline=(255, 255, 255, 220), width=2)
+    odraw.text((88, 55), f"SCENE {scene_num:02d} / {total_scenes:02d}", font=badge_font, fill=theme["badge_text"] + (255,))
 
-    odraw.rounded_rectangle(
-        [68, 52, 330, 106],
-        radius=14,
-        fill=theme["badge_bg"] + (255,),
-        outline=(255, 255, 255, 220),
-        width=2,
-    )
-    odraw.text((90, 64), f"BAGIAN {scene_num:02d} / {total_scenes:02d}", font=badge_font, fill=theme["badge_text"] + (255,))
+    odraw.rounded_rectangle([332, 44, 1295, 94], radius=14, fill=(8, 28, 22, 195), outline=(acc_r, acc_g, acc_b, 130), width=2)
+    header_info = f"{target_audience.upper()[:18]}  •  {chapter_title.upper()[:46]}"
+    odraw.text((354, 57), header_info, font=small_font, fill=theme["accent_soft"] + (255,))
 
-    # Pill Target Audience & Babak (x: 350..1680 agar tidak menabrak Logo Islamic K1 di kanan atas!)
-    odraw.rounded_rectangle(
-        [350, 52, 1680, 106],
-        radius=14,
-        fill=(255, 255, 255, 22),
-        outline=(acc_r, acc_g, acc_b, 120),
-        width=2,
-    )
-    header_info = f"AUDIENCE: {target_audience.upper()[:24]}   •   {chapter_title.upper()[:58]}"
-    odraw.text((376, 65), header_info, font=small_font, fill=theme["accent_soft"] + (255,))
+    style_label_map = {
+        "isometrik-dibongkar": "GAYA: 3D ISOMETRIK",
+        "sejarah-3d": "GAYA: SEJARAH 3D",
+        "tubuh-anime": "GAYA: VISUAL ANIME",
+        "dunia-2d": "GAYA: DUNIA 2D",
+        "kartun-cel": "GAYA: KARTUN CEL",
+        "peta-relief": "GAYA: PETA RELIEF",
+        "promo-produk": "GAYA: SPOTLIGHT",
+    }
+    style_tag = style_label_map.get(m_style, "MOTION FORMAT V2")
+    odraw.rounded_rectangle([1312, 44, 1680, 94], radius=14, fill=(4, 18, 14, 225), outline=theme["accent"] + (220,), width=2)
+    odraw.text((1334, 57), f"🎬 {style_tag}", font=small_font, fill=theme["accent"] + (255,))
 
     # 3. Ikon Vektor & Headline Utama Scene
-    _draw_vector_icon(odraw, cx=132, cy=195, radius=54, icon_type=str(scene.get("icon_type", "mosque")), color=theme["accent"])
-
+    _draw_vector_icon(odraw, cx=126, cy=168, radius=48, icon_type=str(scene.get("icon_type", "mosque")), color=theme["accent"])
     headline_text = str(scene.get("headline", topic_title)).upper().strip()
-    headline_font = _load_bold_font(54, font_path)
+    headline_font = _load_bold_font(48, font_path)
     _draw_text_with_3d_stroke(
         draw=odraw,
-        pos=(212, 145),
-        text=headline_text[:46],
+        pos=(198, 120),
+        text=headline_text[:48],
         font=headline_font,
         fill=(255, 255, 255, 255),
         stroke_fill=(4, 16, 12, 255),
         stroke_width=6,
-        shadow_offset=5,
+        shadow_offset=4,
     )
+    sub_topic_font = _load_bold_font(23, font_path)
+    odraw.text((200, 182), f"TOPIK: {topic_title.upper()[:68]}", font=sub_topic_font, fill=theme["accent"] + (255,))
 
-    sub_topic_font = _load_bold_font(27, font_path)
-    odraw.text(
-        (215, 214),
-        f"TOPIK UTAMA: {topic_title.upper()[:68]}",
-        font=sub_topic_font,
-        fill=theme["accent"] + (255,),
-    )
-
-    # 4. Kartu Poin Penjelasan (3 Bullet Points yang Muncul Bertahap sesuai stage_index)
+    # Siapkan 3 Poin Penjelasan & Parameter Animasi Ken Burns
     bullets = scene.get("bullet_points", [])
     if not isinstance(bullets, list):
         bullets = [str(bullets)]
     while len(bullets) < 3:
         bullets.append("Memahami dan mengamalkan ilmu dengan penuh keikhlasan.")
 
-    bullet_font = _load_bold_font(34, font_path)
-    num_font = _load_bold_font(38, font_path)
+    zf1 = 1.04 + stage_index * 0.05
+    zf2 = 1.18 - stage_index * 0.04
+    pan1 = ((stage_index - 1) * 10, (stage_index % 2) * 6)
+    pan2 = (-(stage_index - 1) * 8, -((stage_index % 2) * 6))
+    pointer_text = str(scene.get("pointer_label") or headline_text[:22]).upper()
 
-    card_y_positions = [285, 455, 625]
-    card_h = 142
-    illust_local_path = str(scene.get("_local_image_path", "")).strip()
-    has_illust = bool(illust_local_path and os.path.exists(illust_local_path))
-    card_x2 = 1230 if has_illust else (W - 76)
+    # PILIH SALAH SATU DARI 4 TATA LETAK SINEMATIK BERBEDA AGAR ANTAR-SCENE SANGAT HIDUP & TIDAK MONOTON!
+    layout_mode = (scene_num - 1) % 4
+    if m_style == "isometrik-dibongkar":
+        layout_mode = 1
+    elif m_style in ("sejarah-3d", "peta-relief") and scene_num % 2 == 1:
+        layout_mode = 2
 
-    for idx in range(3):
-        cy = card_y_positions[idx]
-        is_revealed = stage_index >= (idx + 1)
-        is_current_active = stage_index == (idx + 1)
+    if layout_mode == 1:
+        # =========================================================================
+        # LAYOUT 1 (ISOMETRIK / BEDAH VISUAL PUSAT):
+        # Gambar Utama Besar di Tengah + Gambar Kedua di Kanan Atas + 3 Kartu Callout Mengelilingi dengan Garis Penunjuk `label()`
+        # =========================================================================
+        _paste_zoomed_rounded_photo(
+            base, odraw, illust1_path, (620, 245, 660, 495), zf1, pan1,
+            theme["accent"] + (255,), theme["card_bg"], f"VISUAL UTAMA: {headline_text[:26]}", font_path
+        )
+        _paste_zoomed_rounded_photo(
+            base, odraw, illust2_path, (1320, 245, 525, 235), zf2, pan2,
+            (255, 255, 255, 210), theme["card_bg"], f"DOKUMENTASI TOPIK #{scene_num:02d}", font_path
+        )
+        card_specs = [
+            (68, 250, 515, 225, (650, 360), (595, 360)),
+            (68, 505, 515, 225, (650, 610), (595, 610)),
+            (1320, 505, 525, 225, (1245, 610), (1305, 610)),
+        ]
+        b_font = _load_bold_font(27, font_path)
+        n_font = _load_bold_font(30, font_path)
+        for idx, (cx1, cy1, cw, ch, pt_target, pt_elbow) in enumerate(card_specs):
+            is_rev = stage_index >= (idx + 1)
+            is_act = stage_index == (idx + 1)
+            if is_rev:
+                odraw.rounded_rectangle(
+                    [cx1, cy1, cx1 + cw, cy1 + ch],
+                    radius=20,
+                    fill=theme["card_bg"] + (242 if is_act else 212,),
+                    outline=theme["accent"] + (255,) if is_act else (255, 255, 255, 130),
+                    width=4 if is_act else 2,
+                )
+                odraw.rounded_rectangle([cx1 + 18, cy1 + 18, cx1 + 88, cy1 + 72], radius=12, fill=theme["badge_bg"] + (255,))
+                odraw.text((cx1 + 34, cy1 + 27), f"0{idx + 1}", font=n_font, fill=theme["badge_text"] + (255,))
+                odraw.text((cx1 + 104, cy1 + 29), f"POIN KUNCI #{idx + 1}", font=_load_bold_font(22, font_path), fill=theme["accent"] + (255,))
+                for l_i, ln in enumerate(textwrap.wrap(str(bullets[idx]), width=31)[:3]):
+                    odraw.text((cx1 + 22, cy1 + 88 + l_i * 38), ln, font=b_font, fill=(255, 255, 255, 255))
+                # Garis pointer penunjuk langsung ke objek di gambar tengah!
+                tx, ty = pt_target
+                ex, ey = pt_elbow
+                odraw.line([(ex, ey), (tx, ty)], fill=theme["accent"] + (255,), width=4)
+                odraw.ellipse([tx - 9, ty - 9, tx + 9, ty + 9], fill=theme["accent"] + (255,))
+                odraw.ellipse([tx - 18, ty - 18, tx + 18, ty + 18], outline=theme["accent"] + (255,), width=3)
 
-        if is_revealed:
-            bg_alpha = 242 if is_current_active else 210
-            border_col = theme["accent"] + (255,) if is_current_active else (255, 255, 255, 110)
-            border_w = 4 if is_current_active else 2
-
-            # Bayangan kartu
-            odraw.rounded_rectangle(
-                [76, cy + 8, card_x2 + 8, cy + card_h + 8],
-                radius=22,
-                fill=(0, 0, 0, 125),
+    elif layout_mode == 2:
+        # =========================================================================
+        # LAYOUT 2 (DOKUMENTER WIDESCREEN & TIMELINE HORIZONTAL 3 KOLOM):
+        # 2 Gambar Lebar Berdampingan di Atas (y: 238..532) + 3 Kartu Tahapan Horizontal di Bawahnya (y: 552..748)
+        # =========================================================================
+        _paste_zoomed_rounded_photo(
+            base, odraw, illust1_path, (68, 238, 865, 292), zf1, pan1,
+            theme["accent"] + (255,), theme["card_bg"], f"VISUAL 01 • {headline_text[:28]}", font_path
+        )
+        _paste_zoomed_rounded_photo(
+            base, odraw, illust2_path, (975, 238, 870, 292), zf2, pan2,
+            theme["accent"] + (255,), theme["card_bg"], f"VISUAL 02 • {chapter_title.upper()[:28]}", font_path
+        )
+        if stage_index >= 1:
+            _draw_motion_format_pointer_label(
+                odraw, (460, 365), (530, 290), 575, pointer_text, theme["accent"], font_path
             )
-            # Badan kartu utama
-            odraw.rounded_rectangle(
-                [68, cy, card_x2, cy + card_h],
-                radius=22,
-                fill=theme["card_bg"] + (bg_alpha,),
-                outline=border_col,
-                width=border_w,
-            )
-            # Lencana angka di sisi kiri kartu
-            odraw.rounded_rectangle(
-                [92, cy + 24, 186, cy + card_h - 24],
-                radius=16,
-                fill=theme["badge_bg"] + (255,),
-            )
-            odraw.text((124, cy + 46), f"0{idx + 1}", font=num_font, fill=theme["badge_text"] + (255,))
+        col_w = 568
+        col_gap = 36
+        b_font = _load_bold_font(26, font_path)
+        n_font = _load_bold_font(28, font_path)
+        for idx in range(3):
+            cx1 = 68 + idx * (col_w + col_gap)
+            cy1, ch = 552, 194
+            is_rev = stage_index >= (idx + 1)
+            is_act = stage_index == (idx + 1)
+            if is_rev:
+                odraw.rounded_rectangle(
+                    [cx1, cy1, cx1 + col_w, cy1 + ch],
+                    radius=20,
+                    fill=theme["card_bg"] + (244 if is_act else 212,),
+                    outline=theme["accent"] + (255,) if is_act else (255, 255, 255, 120),
+                    width=4 if is_act else 2,
+                )
+                odraw.rounded_rectangle([cx1 + 18, cy1 + 16, cx1 + 185, cy1 + 60], radius=10, fill=theme["badge_bg"] + (255,))
+                odraw.text((cx1 + 30, cy1 + 22), f"TAHAP 0{idx + 1}", font=n_font, fill=theme["badge_text"] + (255,))
+                for l_i, ln in enumerate(textwrap.wrap(str(bullets[idx]), width=34)[:3]):
+                    odraw.text((cx1 + 22, cy1 + 74 + l_i * 36), ln, font=b_font, fill=(255, 255, 255, 255))
 
-            # Teks poin penjelasan (maksimal 2 baris)
-            b_text = str(bullets[idx]).strip()
-            wrap_w = 43 if has_illust else 62
-            wrapped_b = textwrap.wrap(b_text, width=wrap_w)[:2]
-            if len(wrapped_b) == 1:
-                odraw.text((216, cy + 48), wrapped_b[0], font=bullet_font, fill=(255, 255, 255, 255))
-            else:
-                odraw.text((216, cy + 28), wrapped_b[0], font=bullet_font, fill=(255, 255, 255, 255))
-                odraw.text((216, cy + 74), wrapped_b[1], font=bullet_font, fill=theme["accent_soft"] + (255,))
-        else:
-            # Placeholder tipis sebelum poin muncul
-            odraw.rounded_rectangle(
-                [68, cy, card_x2, cy + card_h],
-                radius=22,
-                fill=(255, 255, 255, 10),
-                outline=(255, 255, 255, 30),
-                width=1,
+    elif layout_mode == 3:
+        # =========================================================================
+        # LAYOUT 3 (BENTO GRID ASIMETRIS — 2 VISUAL DI KIRI + 3 KARTU DI KANAN):
+        # =========================================================================
+        _paste_zoomed_rounded_photo(
+            base, odraw, illust1_path, (68, 245, 620, 310), zf1, pan1,
+            theme["accent"] + (255,), theme["card_bg"], f"SUMBER VISUAL • {headline_text[:24]}", font_path
+        )
+        _paste_zoomed_rounded_photo(
+            base, odraw, illust2_path, (130, 495, 558, 250), zf2, pan2,
+            (255, 255, 255, 220), theme["card_bg"], f"ILUSTRASI PENDAMPING #{scene_num:02d}", font_path
+        )
+        if stage_index >= 1:
+            _draw_motion_format_pointer_label(
+                odraw, (310, 370), (370, 295), 410, pointer_text, theme["accent"], font_path
+            )
+        b_font = _load_bold_font(31, font_path)
+        n_font = _load_bold_font(35, font_path)
+        for idx, cy in enumerate([245, 418, 591]):
+            cx1, cx2, ch = 725, W - 72, 152
+            is_rev = stage_index >= (idx + 1)
+            is_act = stage_index == (idx + 1)
+            if is_rev:
+                odraw.rounded_rectangle(
+                    [cx1, cy, cx2, cy + ch],
+                    radius=22,
+                    fill=theme["card_bg"] + (242 if is_act else 210,),
+                    outline=theme["accent"] + (255,) if is_act else (255, 255, 255, 115),
+                    width=4 if is_act else 2,
+                )
+                odraw.rounded_rectangle([cx1 + 22, cy + 24, cx1 + 110, cy + ch - 24], radius=16, fill=theme["badge_bg"] + (255,))
+                odraw.text((cx1 + 44, cy + 48), f"0{idx + 1}", font=n_font, fill=theme["badge_text"] + (255,))
+                wrapped_b = textwrap.wrap(str(bullets[idx]).strip(), width=44)[:2]
+                for l_i, ln in enumerate(wrapped_b):
+                    odraw.text((cx1 + 134, cy + (48 if len(wrapped_b) == 1 else 30 + l_i * 44)), ln, font=b_font, fill=(255, 255, 255, 255))
+
+    else:
+        # =========================================================================
+        # LAYOUT 0 (DUAL SHOWCASE KANAN + KARTU KINETIK KIRI + POINTER CALLOUT `label()`):
+        # =========================================================================
+        b_font = _load_bold_font(31, font_path)
+        n_font = _load_bold_font(35, font_path)
+        for idx, cy in enumerate([245, 418, 591]):
+            cx1, cx2, ch = 68, 1195, 152
+            is_rev = stage_index >= (idx + 1)
+            is_act = stage_index == (idx + 1)
+            if is_rev:
+                odraw.rounded_rectangle(
+                    [cx1, cy, cx2, cy + ch],
+                    radius=22,
+                    fill=theme["card_bg"] + (242 if is_act else 210,),
+                    outline=theme["accent"] + (255,) if is_act else (255, 255, 255, 115),
+                    width=4 if is_act else 2,
+                )
+                odraw.rounded_rectangle([cx1 + 22, cy + 24, cx1 + 110, cy + ch - 24], radius=16, fill=theme["badge_bg"] + (255,))
+                odraw.text((cx1 + 44, cy + 48), f"0{idx + 1}", font=n_font, fill=theme["badge_text"] + (255,))
+                wrapped_b = textwrap.wrap(str(bullets[idx]).strip(), width=44)[:2]
+                for l_i, ln in enumerate(wrapped_b):
+                    odraw.text((cx1 + 134, cy + (48 if len(wrapped_b) == 1 else 30 + l_i * 44)), ln, font=b_font, fill=(255, 255, 255, 255))
+
+        _paste_zoomed_rounded_photo(
+            base, odraw, illust1_path, (1230, 245, 615, 315), zf1, pan1,
+            theme["accent"] + (255,), theme["card_bg"], f"VISUAL UTAMA • {headline_text[:24]}", font_path
+        )
+        _paste_zoomed_rounded_photo(
+            base, odraw, illust2_path, (1295, 505, 550, 238), zf2, pan2,
+            (255, 255, 255, 220), theme["card_bg"], f"GAMBAR TOPIK #{scene_num:02d}", font_path
+        )
+        if stage_index >= 1:
+            _draw_motion_format_pointer_label(
+                odraw, (1440, 365), (1495, 290), 1530, pointer_text, theme["accent"], font_path
             )
 
-    # 4B. Gambar Visual Ilustrasi di Sisi Kanan (x: 1265..1845, y: 285..767) dengan efek Zoom Bertahap!
-    if has_illust:
-        try:
-            box_x1, box_y1, box_w, box_h = 1265, 285, 580, 482
-            odraw.rounded_rectangle(
-                [box_x1 - 6, box_y1 - 6, box_x1 + box_w + 6, box_y1 + box_h + 6],
-                radius=26,
-                fill=theme["card_bg"] + (240,),
-                outline=theme["accent"] + (255,),
-                width=4,
-            )
-            im_src = Image.open(illust_local_path).convert("RGB")
-            # Efek Ken Burns (zoom bertahap per stage_index)
-            zoom_factor = 1.0 + (stage_index * 0.04)
-            zw, zh = int(box_w * zoom_factor), int(box_h * zoom_factor)
-            im_zoomed = im_src.resize((zw, zh), Image.Resampling.LANCZOS)
-            left_c = (zw - box_w) // 2
-            top_c = (zh - box_h) // 2
-            im_cropped = im_zoomed.crop((left_c, top_c, left_c + box_w, top_c + box_h)).convert("RGBA")
-            base.paste(im_cropped, (box_x1, box_y1))
-        except Exception:
-            pass
-
-    # 5. Kotak Highlight Dalil / Hikmah Utama di Bagian Bawah (Muncul penuh pada stage_index >= 3)
+    # 5. Kotak Highlight Dalil / Hikmah Utama (y: 765..888)
     highlight_text = str(scene.get("highlight_box", "")).strip()
     if highlight_text:
-        hy = 805
-        hh = 148
-        if stage_index >= 3:
-            odraw.rounded_rectangle(
-                [68, hy, W - 76, hy + hh],
-                radius=22,
-                fill=theme["highlight_bg"] + (248,),
-                outline=theme["accent"] + (255,),
-                width=4,
-            )
-            # Pita label kiri "INTISARI / HIKMAH"
-            label_font = _load_bold_font(24, font_path)
-            odraw.rounded_rectangle(
-                [94, hy + 18, 380, hy + 56],
-                radius=10,
-                fill=theme["badge_bg"] + (255,),
-            )
-            odraw.text((112, hy + 24), "HIKMAH & INTISARI", font=label_font, fill=theme["badge_text"] + (255,))
+        hy, hh = 766, 120
+        odraw.rounded_rectangle(
+            [68, hy, W - 72, hy + hh],
+            radius=20,
+            fill=theme["highlight_bg"] + (245 if stage_index >= 2 else 185,),
+            outline=theme["accent"] + (255,),
+            width=3,
+        )
+        label_font = _load_bold_font(21, font_path)
+        odraw.rounded_rectangle([90, hy + 14, 375, hy + 48], radius=9, fill=theme["badge_bg"] + (255,))
+        odraw.text((106, hy + 19), "✨ HIKMAH & INTISARI", font=label_font, fill=theme["badge_text"] + (255,))
+        h_font = _load_bold_font(26, font_path)
+        wrapped_h = textwrap.wrap(f'"{highlight_text}"', width=82)[:2]
+        for l_i, line_str in enumerate(wrapped_h):
+            odraw.text((92, hy + 54 + l_i * 31), line_str, font=h_font, fill=theme["accent_soft"] + (255,))
 
-            h_font = _load_bold_font(30, font_path)
-            wrapped_h = textwrap.wrap(f'"{highlight_text}"', width=76)[:2]
-            for l_i, line_str in enumerate(wrapped_h):
-                odraw.text(
-                    (96, hy + 68 + l_i * 36),
-                    line_str,
-                    font=h_font,
-                    fill=theme["accent_soft"] + (255,),
-                )
-        else:
-            odraw.rounded_rectangle(
-                [68, hy, W - 76, hy + hh],
-                radius=22,
-                fill=(255, 255, 255, 14),
-                outline=(acc_r, acc_g, acc_b, 65),
-                width=2,
-            )
-            hint_font = _load_regular_font(28, font_path)
-            odraw.text(
-                (96, hy + 56),
-                "Simak penjelasan lengkap pada bagian ini...",
-                font=hint_font,
-                fill=(255, 255, 255, 135),
-            )
+    # 6. Bar Subtitle Kinetik Sinkron Suara (`sub` khas Motion Format v2) di y: 902..962
+    narr_words = str(scene.get("narration_text", "")).strip().split()
+    if narr_words:
+        total_w = len(narr_words)
+        chunk_len = max(1, (total_w + 3) // 4)
+        start_w = min(total_w - 1, stage_index * chunk_len)
+        sub_slice = narr_words[start_w : start_w + 11]
+        sub_text = " ".join(sub_slice)
+        odraw.rounded_rectangle(
+            [140, 902, W - 140, 960],
+            radius=29,
+            fill=(3, 14, 11, 232),
+            outline=theme["accent"] + (195,),
+            width=2,
+        )
+        sub_font = _load_bold_font(25, font_path)
+        odraw.text((178, 916), f"🗣️  {sub_text[:88]}", font=sub_font, fill=theme["accent"] + (255,))
 
-    # 6. Progress Bar Video di Bagian Paling Bawah (y: 985..1025)
-    bar_x1, bar_x2 = 68, W - 76
-    bar_y = 995
-    odraw.rounded_rectangle([bar_x1, bar_y, bar_x2, bar_y + 18], radius=9, fill=(255, 255, 255, 38))
+    # 7. Progress Bar Video di Bagian Paling Bawah (y: 978..994)
+    bar_x1, bar_x2 = 68, W - 72
+    bar_y = 978
+    odraw.rounded_rectangle([bar_x1, bar_y, bar_x2, bar_y + 14], radius=7, fill=(255, 255, 255, 42))
     progress_frac = min(1.0, ((scene_num - 1) + (stage_index + 1) / 4.0) / float(max(1, total_scenes)))
     fill_w = max(24, int((bar_x2 - bar_x1) * progress_frac))
-    odraw.rounded_rectangle([bar_x1, bar_y, bar_x1 + fill_w, bar_y + 18], radius=9, fill=theme["accent"] + (255,))
+    odraw.rounded_rectangle([bar_x1, bar_y, bar_x1 + fill_w, bar_y + 14], radius=7, fill=theme["accent"] + (255,))
 
-    footer_font = _load_bold_font(22, font_path)
-    odraw.text((bar_x1, 1022), "ISLAMIC K1 • MOTION GRAPHICS EXPLAINER", font=footer_font, fill=(255, 255, 255, 185))
-    odraw.text((bar_x2 - 380, 1022), "SUBSCRIBE • LIKE • BAGIKAN KEBAIKAN", font=footer_font, fill=theme["accent"] + (220,))
+    footer_font = _load_bold_font(20, font_path)
+    odraw.text((bar_x1, 1002), f"ISLAMIC K1 • MOTION FORMAT V2 ({style_tag})", font=footer_font, fill=(255, 255, 255, 195))
+    odraw.text((bar_x2 - 380, 1002), "SUBSCRIBE • LIKE • BAGIKAN KEBAIKAN", font=footer_font, fill=theme["accent"] + (230,))
 
     final_img = Image.alpha_composite(base, overlay).convert("RGB")
     final_img.save(output_png_path, "PNG")
@@ -1652,6 +1997,7 @@ def build_complete_explainer_package(
                         "motion_style": m_style,
                         "pointer_label": p_label,
                         "image_url": str(sc.get("image_url", "")),
+                        "image2_url": str(sc.get("image2_url") or sc.get("image_url", "")),
                         "icon_type": str(sc.get("icon_type", "mosque")),
                         "theme_name": str(sc.get("theme") or sc.get("theme_name") or theme_keys[idx % len(theme_keys)]),
                         "durationInFrames": max(24, int(round(c_dur * remotion_fps))),

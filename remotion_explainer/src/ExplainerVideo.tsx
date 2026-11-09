@@ -18,6 +18,7 @@ export interface SceneItem {
   motion_style?: string;
   pointer_label?: string;
   image_url?: string;
+  image2_url?: string;
   icon_type: string;
   theme_name: string;
   durationInFrames: number;
@@ -415,6 +416,25 @@ const SceneCard: React.FC<{
         overflow: "hidden"
       }}
     >
+      {/* Blurred Topic Internet Photo Background Layer */}
+      {scene.image_url && (
+        <img
+          src={scene.image_url}
+          alt=""
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            filter: "blur(20px) brightness(0.28)",
+            opacity: 0.45,
+            transform: `scale(${1.08 + Math.sin(frame * 0.02) * 0.04})`,
+            pointerEvents: "none"
+          }}
+        />
+      )}
+
       {/* 7 Motion Format v2 Dynamic Environment Layer */}
       <MotionStyleBackdrop styleId={styleId} accent={theme.accent} soft={theme.soft} frame={frame} />
 
@@ -572,11 +592,12 @@ const SceneCard: React.FC<{
         </div>
       </div>
 
-      {/* Main Content Split: 3 Staggered Bullet Cards (Left) + Dynamic Motion Illustration with Pointer Callout (Right) */}
+      {/* Main Content Split: Alternating Multi-Layout (Cards <-> Dual Internet Image Showcase + Pointer Callout) */}
       <div
         style={{
           marginTop: 18,
           display: "flex",
+          flexDirection: isEvenScene ? "row-reverse" : "row",
           alignItems: "stretch",
           gap: 28,
           maxWidth: 1776
@@ -672,6 +693,35 @@ const SceneCard: React.FC<{
                 transform: `scale(${imgScale}) translate(${imgPanX}px, ${imgPanY}px)`
               }}
             />
+
+            {/* Secondary Overlapping Topic Visual Card (Dual-Image Gallery) */}
+            {scene.image2_url && (
+              <div
+                style={{
+                  position: "absolute",
+                  right: 14,
+                  bottom: 52,
+                  width: 225,
+                  height: 152,
+                  borderRadius: 16,
+                  border: `3px solid #ffffff`,
+                  boxShadow: "0 10px 24px rgba(0,0,0,0.75)",
+                  overflow: "hidden",
+                  transform: `rotate(${isEvenScene ? -3 : 3}deg) scale(${pointerAnim})`
+                }}
+              >
+                <img
+                  src={scene.image2_url}
+                  alt=""
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                    transform: `scale(${1.18 - (imgScale - 1.02) * 0.5})`
+                  }}
+                />
+              </div>
+            )}
 
             {/* Motion Format Pointer Callout (`label()` — glowing target dot + angled leader line + pill) */}
             <svg
