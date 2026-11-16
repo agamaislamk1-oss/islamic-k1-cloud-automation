@@ -69,6 +69,7 @@ from video_editor import (
     create_srt_subtitle,
     render_final_video,
     render_image_to_shorts_video,
+    render_image_and_audio_to_video,
     generate_youtube_thumbnail,
 )
 from ai_metadata_generator import (
@@ -97,6 +98,7 @@ DRIVE_QUEUE_FOLDER = "01_Antrian_NotebookLM"
 DRIVE_DONE_FOLDER = "02_Sudah_Diupload_YouTube"
 DRIVE_FORM_QUEUE_FOLDER = "03_Antrian_Google_Form_MotionGrafis"
 DRIVE_IMAGE_SHORTS_FOLDER = "05_Antrian_Gambar_Shorts"
+DRIVE_IMAGE_AUDIO_FOLDER = "06_Antrian_Gambar_Dan_Audio"
 FORM_SHEET_NAME = "Form_Motion_Grafis_IslamicK1"
 HISTORY_FILENAME = "upload_history_islamick1.json"
 
@@ -1670,6 +1672,237 @@ def moderate_and_reply_channel_comments(
     return history_file_id
 
 
+def process_image_and_audio_queue(
+    gemini_api_key: str,
+    root_id: str,
+    assets_id: str,
+    img_audio_queue_id: str,
+    done_id: str,
+    history_data: Dict[str, Any],
+    history_file_id: Optional[str],
+    existing_yt_videos: List[Dict[str, str]],
+) -> Tuple[int, Optional[str], bool]:
+    """
+    Memproses pasangan Gambar (.jpg/.png/.webp) + Audio (.m4a/.mp3/.wav/.aac) di folder `06_Antrian_Gambar_Dan_Audio`:
+    1. Mencocokkan file audio `.m4a` dengan file gambar di dalam folder (baik bernama sama maupun berpasangan langsung).
+    2. Mentranskripsikan isi audio `.m4a` & menyusun Judul, Deskripsi 3 Paragraf Islami + Buku Mengaji Jilid 1-3 & Donasi,
+       Timeline/Chapters, Tag, Playlist, serta Terjemahan 10 Bahasa Dunia + Subtitle Resmi CC.
+    3. Menggabungkan Gambar + Audio `.m4a` + Iklan Buku Mengaji + Outro `SUBSCRIBE ISLAMIC K1.mp4` + Logo Kanan Atas.
+    4. Mengunggah ke YouTube Islamic K1 dan memindahkan file gambar & audio ke `02_Sudah_Diupload_YouTube`.
+    """
+    youtube, drive = get_google_services()
+    q_all = f"'{img_audio_queue_id}' in parents and trashed = false"
+    all_files = (
+        drive.files()
+        .list(q=q_all, fields="files(id, name, mimeType, md5Checksum, createdTime)", orderBy="createdTime asc", pageSize=50)
+        .execute(num_retries=4)
+        .get("files", [])
+    )
+    if not all_files:
+        return 0, history_file_id, False
+
+    audio_exts = (".m4a", ".mp3", ".wav", ".aac", ".ogg", ".flac")
+    image_exts = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
+
+    audio_files = [
+        f for f in all_files
+        if f["name"].lower().endswith(audio_exts) or "audio/" in str(f.get("mimeType", "")).lower()
+    ]
+    image_files = [
+        f for f in all_files
+        if f["name"].lower().endswith(image_exts) or "image/" in str(f.get("mimeType", "")).lower()
+    ]
+
+    if not audio_files or not image_files:
+        return 0, history_file_id, False
+
+    print(
+        f"[GAMBAR + AUDIO .M4A] Ditemukan {len(audio_files)} audio & {len(image_files)} gambar di '{DRIVE_IMAGE_AUDIO_FOLDER}'."
+    )
+    processed_pairs = 0
+    used_img_ids = set()
+
+    for aud_f in audio_files:
+        dup, reason = is_already_uploaded(aud_f, history_data, existing_yt_videos, youtube=youtube)
+        if dup:
+            print(f"[SKIP GAMBAR+AUDIO] Audio '{aud_f['name']}' sudah pernah diupload ({reason}).")
+            move_drive_file(drive, aud_f["id"], img_audio_queue_id, done_id)
+            continue
+
+        # Cari gambar pasangan: prioritas 1 nama dasar mirip/sama, prioritas 2 gambar pertama yang belum terpakai
+        aud_norm = normalize_key(aud_f["name"])
+        matched_img = None
+        for im_f in image_files:
+            if im_f["id"] in used_img_ids:
+                continue
+            im_norm = normalize_key(im_f["name"])
+            if aud_norm and im_norm and (aud_norm == im_norm or aud_norm in im_norm or im_norm in aud_norm):
+                matched_img = im_f
+                break
+        if not matched_img:
+            for im_f in image_files:
+                if im_f["id"] not in used_img_ids:
+                    matched_img = im_f
+                    break
+        if not matched_img:
+            matched_img = image_files[0]
+
+        print("=================================================================")
+        print(f"[PROSES GAMBAR + AUDIO #{processed_pairs + 1}] Audio: '{aud_f['name']}' + Gambar: '{matched_img['name']}'")
+        print("=================================================================")
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="islamick1_imgaud_", ignore_cleanup_errors=True) as work_dir:
+                logo_path, outro_path, font_path = prepare_assets(drive, assets_id, work_dir)
+                aud_ext = os.path.splitext(aud_f["name"])[1].lower() or ".m4a"
+                img_ext = os.path.splitext(matched_img["name"])[1].lower() or ".jpg"
+                local_aud = os.path.join(work_dir, f"input_audio{aud_ext}")
+                local_img = os.path.join(work_dir, f"input_image{img_ext}")
+
+                download_drive_file(drive, aud_f["id"], local_aud)
+                download_drive_file(drive, matched_img["id"], local_img)
+
+                orig_aud_dur = get_video_duration(local_aud)
+                print(f"[AI GAMBAR+AUDIO] Mentranskripsi audio '{aud_f['name']}' ({orig_aud_dur:.1f}s) & menyusun metadata 10 bahasa...")
+                ai_data = analyze_video_with_gemini(
+                    video_path=local_aud,
+                    trimmed_duration=orig_aud_dur,
+                    original_filename=aud_f["name"],
+                    gemini_api_key=gemini_api_key,
+                )
+
+                trimmed_dur, smart_cut = detect_smart_end_trim_timestamp(
+                    video_path=local_aud,
+                    orig_duration=orig_aud_dur,
+                    transcript_segments=ai_data.get("transcript_segments"),
+                )
+                # Untuk file rekaman audio .m4a murni tanpa kartu watermark visual di ujung, jangan potong jika tidak ada hening panjang
+                if smart_cut >= 3.8:
+                    smart_cut = 0.0
+                    trimmed_dur = orig_aud_dur
+
+                final_mp4 = os.path.join(work_dir, "final_img_audio_islamick1.mp4")
+                print("[FFMPEG GAMBAR+AUDIO] Menggabungkan Gambar + Audio .m4a + Iklan Buku Mengaji + Outro Subscribe...")
+                final_dur, is_vert_short = render_image_and_audio_to_video(
+                    image_path=local_img,
+                    audio_path=local_aud,
+                    outro_video_path=outro_path,
+                    logo_path=logo_path,
+                    font_path=font_path,
+                    output_video_path=final_mp4,
+                    cut_last_seconds=smart_cut,
+                )
+
+                uniform_title = format_uniform_youtube_title(ai_data["title"], aud_f["name"])
+                if is_vert_short and "#shorts" not in uniform_title.lower():
+                    uniform_title = f"{uniform_title[:88]} #Shorts"
+                ai_data["title"] = uniform_title
+
+                publish_at_iso = compute_next_prime_time_utc(
+                    recommended_slot=ai_data.get("recommended_publish_slot", "MALAM"),
+                    last_scheduled_iso=history_data.get("last_scheduled_iso"),
+                )
+                md5_ref = (aud_f.get("md5Checksum") or aud_f["id"])[:10]
+                full_description = f"{ai_data['full_description']}\n\n[Ref:M4A_{md5_ref}]"
+
+                locs = ai_data.get("localizations", {})
+                locs["id"] = {"title": uniform_title[:100], "description": full_description[:4900]}
+                tags_list = ai_data.get("tags", ["IslamicK1", "Keluarga Muslim", "Kajian Islam"])[:13]
+                if is_vert_short and "Shorts" not in tags_list:
+                    tags_list.extend(["Shorts", "YouTubeShorts"])
+
+                video_body = {
+                    "snippet": {
+                        "title": uniform_title[:100],
+                        "description": full_description[:4900],
+                        "tags": tags_list[:15],
+                        "categoryId": "27",
+                        "defaultLanguage": "id",
+                        "defaultAudioLanguage": "id",
+                    },
+                    "status": {
+                        "privacyStatus": "private",
+                        "publishAt": publish_at_iso,
+                        "selfDeclaredMadeForKids": False,
+                        "containsSyntheticMedia": True,
+                        "embeddable": True,
+                        "publicStatsViewable": True,
+                    },
+                    "localizations": locs,
+                }
+
+                youtube, drive = get_google_services()
+                print(f"[YOUTUBE GAMBAR+AUDIO] Mengunggah video: '{uniform_title}' (Jadwal: {publish_at_iso})...")
+                media_v = MediaFileUpload(final_mp4, mimetype="video/mp4", chunksize=10 * 1024 * 1024, resumable=True)
+                ins_req = youtube.videos().insert(part="snippet,status,localizations", body=video_body, media_body=media_v)
+                resp_yt = None
+                while resp_yt is None:
+                    _, resp_yt = ins_req.next_chunk(num_retries=5)
+                del ins_req
+                del media_v
+
+                vid_id = resp_yt["id"]
+                print(f"[YOUTUBE GAMBAR+AUDIO] Berhasil diunggah! Link: https://youtu.be/{vid_id}")
+                post_official_promo_comment_if_needed(youtube, vid_id)
+
+                try:
+                    add_video_to_matching_playlists(
+                        youtube=youtube,
+                        video_id=vid_id,
+                        original_filename=aud_f["name"],
+                        ai_playlist_name=ai_data.get("playlist_name", "Kajian Keluarga Muslim"),
+                    )
+                except Exception:
+                    pass
+
+                try:
+                    segments_cc = ai_data.get("transcript_segments", [])
+                    if segments_cc:
+                        srt_path = os.path.join(work_dir, "captions_id.srt")
+                        create_srt_subtitle(segments_cc, srt_path, trimmed_dur)
+                        youtube.captions().insert(
+                            part="snippet",
+                            body={"snippet": {"videoId": vid_id, "language": "id", "name": "Bahasa Indonesia", "isDraft": False}},
+                            media_body=MediaFileUpload(srt_path, mimetype="application/x-subrip"),
+                        ).execute(num_retries=2)
+                except Exception:
+                    pass
+
+                history_data.setdefault("uploaded_files", {})[aud_f["id"]] = {
+                    "original_name": aud_f["name"],
+                    "paired_image_name": matched_img["name"],
+                    "md5Checksum": aud_f.get("md5Checksum", ""),
+                    "youtube_video_id": vid_id,
+                    "youtube_title": uniform_title,
+                    "scheduled_publish_at": publish_at_iso,
+                    "processed_at": datetime.now(TZ_UTC).isoformat(),
+                    "upgraded_v3_cover_title_playlist": True,
+                }
+                existing_yt_videos.append({"video_id": vid_id, "title": uniform_title, "description": full_description})
+                history_data["cached_youtube_videos"] = existing_yt_videos
+                history_data["last_scheduled_iso"] = publish_at_iso
+                history_file_id = save_upload_history(drive, root_id, history_data, history_file_id)
+
+                move_drive_file(drive, aud_f["id"], img_audio_queue_id, done_id)
+                if len(audio_files) == 1 or len(image_files) > 1:
+                    move_drive_file(drive, matched_img["id"], img_audio_queue_id, done_id)
+                    used_img_ids.add(matched_img["id"])
+
+                processed_pairs += 1
+                time.sleep(12)
+
+        except (HttpError, BrokenPipeError, ConnectionError, TimeoutError) as net_err:
+            err_str = str(net_err)
+            if "quotaExceeded" in err_str or "uploadLimitExceeded" in err_str or isinstance(net_err, BrokenPipeError):
+                return processed_pairs, history_file_id, True
+            break
+        except Exception as e:
+            print(f"[PERINGATAN] Gagal memproses pasangan Gambar+Audio '{aud_f['name']}': {e}")
+            continue
+
+    return processed_pairs, history_file_id, False
+
+
 def run_queue_pipeline():
     """
     Memproses antrian video di Google Drive SATU PER SATU secara berurutan tanpa henti
@@ -1682,13 +1915,14 @@ def run_queue_pipeline():
 
     youtube, drive = get_google_services()
 
-    # 1. Pastikan struktur folder di Google Drive 2 TB siap (termasuk 05_Antrian_Gambar_Shorts)
+    # 1. Pastikan struktur folder di Google Drive 2 TB siap (termasuk 05_Antrian_Gambar_Shorts & 06_Antrian_Gambar_Dan_Audio)
     root_id = ensure_drive_folder(drive, DRIVE_ROOT_FOLDER)
     assets_id = ensure_drive_folder(drive, DRIVE_ASSETS_FOLDER, root_id)
     queue_id = ensure_drive_folder(drive, DRIVE_QUEUE_FOLDER, root_id)
     done_id = ensure_drive_folder(drive, DRIVE_DONE_FOLDER, root_id)
     form_queue_id = ensure_drive_folder(drive, DRIVE_FORM_QUEUE_FOLDER, root_id)
     image_shorts_id = ensure_drive_folder(drive, DRIVE_IMAGE_SHORTS_FOLDER, root_id)
+    image_audio_id = ensure_drive_folder(drive, DRIVE_IMAGE_AUDIO_FOLDER, root_id)
 
     # 2. Ambil riwayat upload & daftar video eksisting di channel Islamic K1
     history_data, history_file_id = load_upload_history(drive, root_id)
@@ -1705,7 +1939,22 @@ def run_queue_pipeline():
     history_data["cached_youtube_videos"] = existing_yt_videos
     history_file_id = save_upload_history(drive, root_id, history_data, history_file_id)
 
-    # 2B. PRIORITAS #0: Proses antrian Gambar Shorts di `05_Antrian_Gambar_Shorts`
+    # 2A. PRIORITAS #0A: Proses antrian Gambar + Audio (.m4a) di `06_Antrian_Gambar_Dan_Audio`
+    img_aud_processed, history_file_id, ia_quota_hit = process_image_and_audio_queue(
+        gemini_api_key=gemini_api_key,
+        root_id=root_id,
+        assets_id=assets_id,
+        img_audio_queue_id=image_audio_id,
+        done_id=done_id,
+        history_data=history_data,
+        history_file_id=history_file_id,
+        existing_yt_videos=existing_yt_videos,
+    )
+    if ia_quota_hit:
+        print(f"[SELESAI SESI] Kuota harian YouTube tercapai. Total Gambar+Audio (.m4a) diproses: {img_aud_processed}")
+        return
+
+    # 2B. PRIORITAS #0B: Proses antrian Gambar Shorts di `05_Antrian_Gambar_Shorts`
     img_processed, history_file_id, img_quota_hit = process_image_shorts_queue(
         gemini_api_key=gemini_api_key,
         root_id=root_id,
@@ -1735,7 +1984,7 @@ def run_queue_pipeline():
         print(f"[SELESAI SESI] Kuota harian YouTube tercapai. Total video Google Form diproses: {form_processed}")
         return
 
-    processed_count = img_processed + form_processed
+    processed_count = img_aud_processed + img_processed + form_processed
 
     # 4. PRIORITAS UTAMA #2: Proses antrian video baru di 01_Antrian_NotebookLM satu per satu
     while True:

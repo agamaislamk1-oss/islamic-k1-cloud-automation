@@ -1001,3 +1001,86 @@ def render_image_to_shorts_video(
         _sh.copy2(raw_mp4, output_video_path)
 
     return get_video_duration(output_video_path)
+
+
+def render_image_and_audio_to_video(
+    image_path: str,
+    audio_path: str,
+    outro_video_path: str,
+    logo_path: str,
+    font_path: str,
+    output_video_path: str,
+    cut_last_seconds: float = 0.0,
+) -> Tuple[float, bool]:
+    """
+    Menggabungkan 1 Gambar (.jpg/.png/.webp) + 1 Audio (.m4a/.mp3/.wav) dari folder `06_Antrian_Gambar_Dan_Audio`,
+    menyesuaikan rasio gambar secara otomatis dengan bingkai emas Islami + latar belakang blur elegan,
+    menambahkan Pop-Up Buku Mengaji, Bumper Sampul Buku 1-3, Logo Islamic K1 di kanan atas,
+    dan menyambungkan video outro `SUBSCRIBE ISLAMIC K1.mp4` di bagian akhir!
+    Mengembalikan tuple: (final_duration, is_portrait_shorts).
+    """
+    audio_dur = get_video_duration(audio_path)
+    src_im = Image.open(image_path).convert("RGB")
+    sw, sh = src_im.size
+    src_ratio = sw / float(max(1, sh))
+
+    # Jika gambar Potret dan durasi audio <= 52 detik, jadikan YouTube Shorts (9:16); selain itu Landscape Full HD (16:9)
+    is_vert = (sh > sw * 1.15) and (audio_dur <= 52.0)
+    W, H = (1080, 1920) if is_vert else (1920, 1080)
+
+    work_dir = os.path.dirname(os.path.abspath(output_video_path))
+    framed_png = os.path.join(work_dir, "img_audio_framed.png")
+
+    canvas = Image.new("RGBA", (W, H), (6, 32, 24, 255))
+    bg_im = src_im.resize((W, H), Image.Resampling.BILINEAR).filter(ImageFilter.GaussianBlur(radius=26))
+    bg_im = ImageEnhance.Brightness(bg_im).enhance(0.32)
+    canvas.paste(bg_im.convert("RGBA"), (0, 0))
+
+    ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    odraw = ImageDraw.Draw(ov)
+    odraw.rounded_rectangle([24, 24, W - 24, H - 24], radius=26, outline=(255, 208, 0, 140), width=3)
+
+    max_bw, max_bh = (W - 110, H - 220) if is_vert else (W - 160, H - 140)
+    if src_ratio > (max_bw / float(max_bh)):
+        box_w = max_bw
+        box_h = max(320, int(box_w / src_ratio))
+    else:
+        box_h = max_bh
+        box_w = max(320, int(box_h * src_ratio))
+
+    box_x = (W - box_w) // 2
+    box_y = (H - box_h) // 2
+    odraw.rounded_rectangle(
+        [box_x - 6, box_y - 6, box_x + box_w + 6, box_y + box_h + 6],
+        radius=22, fill=(8, 40, 30, 245), outline=(255, 208, 0, 255), width=5,
+    )
+    fg_im = src_im.resize((box_w, box_h), Image.Resampling.LANCZOS).convert("RGBA")
+    canvas.paste(fg_im, (box_x, box_y))
+    Image.alpha_composite(canvas, ov).convert("RGB").save(framed_png, "PNG")
+
+    combined_raw_mp4 = os.path.join(work_dir, "img_audio_combined_raw.mp4")
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-loop", "1", "-framerate", "30", "-i", framed_png,
+            "-i", audio_path,
+            "-vf", f"scale={W}:{H},setsar=1,format=yuv420p",
+            "-af", "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo",
+            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "stillimage", "-crf", "21",
+            "-c:a", "aac", "-b:a", "192k",
+            "-shortest",
+            combined_raw_mp4,
+        ],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+    )
+
+    final_dur = render_final_video(
+        input_video_path=combined_raw_mp4,
+        outro_video_path=outro_video_path,
+        logo_path=logo_path,
+        fonts_dir=font_path,
+        output_video_path=output_video_path,
+        cut_last_seconds=cut_last_seconds,
+        force_portrait=is_vert,
+    )
+    return final_dur, is_vert
