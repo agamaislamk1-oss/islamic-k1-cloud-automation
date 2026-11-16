@@ -624,8 +624,8 @@ def prepare_assets(drive, assets_folder_id: str, work_dir: str) -> Tuple[str, st
     os.makedirs(covers_dir, exist_ok=True)
     try:
         q_cov = (
-            f"'{assets_folder_id}' in parents and trashed = false and name != 'logo.png' and "
-            f"(mimeType contains 'image/' or name contains '.jpg' or name contains '.jpeg' or name contains '.png' or name contains '.webp')"
+            f"'{assets_folder_id}' in parents and trashed = false and "
+            f"(name contains 'Buku Catatan' or name contains 'Mengaji' or name contains 'Jilid')"
         )
         cov_files = (
             drive.files()
@@ -634,7 +634,6 @@ def prepare_assets(drive, assets_folder_id: str, work_dir: str) -> Tuple[str, st
             .get("files", [])
         )
         for idx_c, cf in enumerate(cov_files[:3]):
-            ext_c = os.path.splitext(cf["name"])[1].lower() or ".jpg"
             c_dst = os.path.join(covers_dir, f"book_cover_{idx_c:02d}_{cf['name']}")
             download_drive_file(drive, cf["id"], c_dst)
             print(f"[ASET SAMPUL BUKU] Berhasil memuat sampul buku dari 00_Assets: {cf['name']}")
