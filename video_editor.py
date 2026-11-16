@@ -239,26 +239,33 @@ def detect_smart_end_trim_timestamp(
     except Exception:
         pass
 
-    # 2. Cek batas akhir segmen ucapan dari transkrip Whisper (jika ada)
+    # 2. Cek batas akhir segmen ucapan & apakah ada ucapan Salam di bagian akhir dari transkrip Whisper
     whisper_speech_end = 0.0
+    has_closing_salam = False
     if transcript_segments:
         try:
             valid_ends = [float(seg.get("end", 0.0)) for seg in transcript_segments if float(seg.get("end", 0.0)) <= orig_duration]
             if valid_ends:
                 whisper_speech_end = max(valid_ends)
+            tail_text = " ".join([str(seg.get("text", "")).lower() for seg in transcript_segments[-3:]])
+            if any(k in tail_text for k in ("salam", "warahmatullah", "wabarakatuh", "warohmatulloh", "wabarokatuh")):
+                has_closing_salam = True
         except Exception:
             pass
 
-    # Gunakan titik waktu paling akhir di antara deteksi gelombang suara & transkrip agar salam 100% utuh!
-    detected_speech_end = max(silence_speech_end, whisper_speech_end)
-
-    if detected_speech_end > (orig_duration - 7.5) and detected_speech_end < orig_duration:
-        # Tambahkan jeda napas 0.35 detik setelah huruf terakhir salam selesai diucapkan
-        # Namun tetap potong minimal 0.8 detik terakhir jika ada kartu watermark bisu di ujung
-        trimmed_duration = min(orig_duration - 0.6, detected_speech_end + 0.35)
+    # Jika terdeteksi ada ucapan salam penutup ATAU ada jeda hening khas watermark NotebookLM di ujung:
+    # potong tepat setelah salam/ucapan selesai (+0.35s) agar salam TIDAK PERNAH terpotong!
+    # Namun jika video BUKAN dari NotebookLM (tidak ada salam di akhir & tidak ada jeda hening watermark),
+    # otomatis potong 4.0 detik terakhir lalu sambung dengan outro Islamic K1 sesuai instruksi!
+    if has_closing_salam or silence_speech_end > 0.0:
+        detected_speech_end = max(silence_speech_end, whisper_speech_end)
+        if detected_speech_end > (orig_duration - 8.5) and detected_speech_end < orig_duration:
+            trimmed_duration = min(orig_duration - 0.5, detected_speech_end + 0.35)
+        else:
+            trimmed_duration = max(1.0, orig_duration - 2.0)
     else:
-        # Fallback aman: hanya potong 1.8 detik ujung hening watermark (bukan 4 detik agar salam aman)
-        trimmed_duration = max(1.0, orig_duration - 1.8)
+        # Video non-NotebookLM: potong 4 detik terakhir dan sambung dengan video outro Islamic K1
+        trimmed_duration = max(1.0, orig_duration - 4.0)
 
     cut_last_seconds = max(0.0, orig_duration - trimmed_duration)
     return trimmed_duration, cut_last_seconds
