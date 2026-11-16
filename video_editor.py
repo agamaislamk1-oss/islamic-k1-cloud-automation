@@ -138,9 +138,10 @@ def create_srt_subtitle(
     output_srt_path: str,
     max_duration: float,
 ) -> None:
-    """Membuat file .SRT standar untuk diunggah ke fitur Subtitle/CC YouTube."""
+    """Membuat file .SRT standar untuk diunggah ke fitur Subtitle/CC YouTube (+ Info Buku Mengaji di akhir)."""
     lines = []
     idx = 1
+    last_end = 0.0
     for seg in segments:
         start_sec = float(seg.get("start", 0.0))
         end_sec = float(seg.get("end", start_sec + 3.0))
@@ -152,7 +153,17 @@ def create_srt_subtitle(
         if not text:
             continue
         lines.append(f"{idx}\n{format_srt_time(start_sec)} --> {format_srt_time(end_sec)}\n{text}\n\n")
+        last_end = max(last_end, end_sec)
         idx += 1
+
+    # Usulan 4: Sisipkan informasi Buku Catatan Materi & Aktivitas Perkembangan Mengaji di baris akhir CC resmi YouTube
+    promo_start = max(0.5, min(last_end + 0.2, max_duration - 4.5))
+    promo_end = max(promo_start + 3.5, max_duration)
+    promo_cc_text = (
+        "📖 Miliki Buku Catatan Materi & Aktivitas Perkembangan Mengaji (Jilid 1, 2, 3) "
+        "— Klik Link Shopee di Deskripsi & Komentar Video!"
+    )
+    lines.append(f"{idx}\n{format_srt_time(promo_start)} --> {format_srt_time(promo_end)}\n{promo_cc_text}\n\n")
 
     with open(output_srt_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
@@ -271,6 +282,152 @@ def detect_smart_end_trim_timestamp(
     return trimmed_duration, cut_last_seconds
 
 
+def _load_book_cover_images_from_env() -> List[str]:
+    """Mengambil daftar file gambar sampul buku yang ditaruh pengguna di folder `00_Assets`."""
+    covers_dir = os.environ.get("ISLAMICK1_BOOK_COVERS_DIR", "")
+    if not covers_dir or not os.path.isdir(covers_dir):
+        return []
+    files = sorted(
+        [
+            os.path.join(covers_dir, f)
+            for f in os.listdir(covers_dir)
+            if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
+        ]
+    )
+    return files
+
+
+def _create_lower_third_promo_png(out_png_path: str, font_path: str, is_portrait: bool = False) -> str:
+    """
+    Usulan 3: Membuat overlay transparan Pop-Up Lower-Third Banner (muncul 6 detik di tengah video)
+    lengkap dengan gambar sampul buku dari `00_Assets` (jika ada) + info Jilid 1, 2, 3.
+    """
+    W, H = (1080, 1920) if is_portrait else (1920, 1080)
+    canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    covers = _load_book_cover_images_from_env()
+
+    if is_portrait:
+        bx1, by1, bx2, by2 = 44, H - 360, W - 44, H - 210
+    else:
+        bx1, by1, bx2, by2 = 64, H - 185, 1340, H - 52
+
+    draw.rounded_rectangle([bx1, by1, bx2, by2], radius=22, fill=(6, 32, 24, 242), outline=(255, 208, 0, 255), width=4)
+    text_x = bx1 + 28
+    if covers:
+        try:
+            cov_im = Image.open(covers[0]).convert("RGBA")
+            ch = (by2 - by1) - 20
+            cw = max(65, int(cov_im.width * (ch / float(max(1, cov_im.height)))))
+            cov_im = cov_im.resize((min(130, cw), ch), Image.Resampling.LANCZOS)
+            canvas.paste(cov_im, (bx1 + 16, by1 + 10), cov_im)
+            text_x = bx1 + cov_im.width + 32
+        except Exception:
+            pass
+
+    f_title = _load_bold_font(23 if is_portrait else 27, font_path)
+    f_sub = _load_bold_font(19 if is_portrait else 22, font_path)
+    draw.text((text_x, by1 + 22), "📖 BUKU CATATAN MATERI & AKTIVITAS MENGAJI (JILID 1, 2, 3)", font=f_title, fill=(255, 216, 35, 255))
+    draw.text((text_x, by1 + 66), "👉 Pesan di Shopee: Klik Link Resmi di Deskripsi & Komentar Pertama!", font=f_sub, fill=(255, 255, 255, 250))
+    canvas.save(out_png_path, "PNG")
+    return out_png_path
+
+
+def _build_product_bumper_mp4(work_dir: str, font_path: str, is_portrait: bool = False) -> Optional[str]:
+    """
+    Usulan 2: Membuat klip video 4.2 detik (Kartu Visual Sampul Buku dari `00_Assets` + Suara Narator)
+    yang otomatis diselipkan tepat sebelum video outro `SUBSCRIBE ISLAMIC K1.mp4`.
+    """
+    import asyncio
+
+    try:
+        W, H = (1080, 1920) if is_portrait else (1920, 1080)
+        bumper_png = os.path.join(work_dir, "product_bumper_card.png")
+        bumper_mp3 = os.path.join(work_dir, "product_bumper_vo.mp3")
+        bumper_mp4 = os.path.join(work_dir, "product_bumper_clip.mp4")
+
+        canvas = Image.new("RGBA", (W, H), (6, 34, 26, 255))
+        draw = ImageDraw.Draw(canvas)
+        for y in range(0, H, 6):
+            t = y / float(H)
+            draw.rectangle([0, y, W, y + 6], fill=(int(10 * (1 - t) + 4 * t), int(48 * (1 - t) + 20 * t), int(36 * (1 - t) + 15 * t), 255))
+        draw.rounded_rectangle([28, 28, W - 28, H - 28], radius=28, outline=(255, 208, 0, 220), width=4)
+
+        f_head = _load_bold_font(36 if is_portrait else 46, font_path)
+        f_sub = _load_bold_font(26 if is_portrait else 32, font_path)
+        f_pill = _load_bold_font(24 if is_portrait else 28, font_path)
+
+        draw.rounded_rectangle([W // 2 - 290, 56, W // 2 + 290, 114], radius=16, fill=(255, 208, 0, 255))
+        draw.text((W // 2 - 255, 69), "📖 REKOMENDASI BUKU MENGAJI", font=f_pill, fill=(8, 32, 24, 255))
+
+        title_lines = ["ISLAMIC STUDIES: BUKU CATATAN MATERI", "& AKTIVITAS PERKEMBANGAN MENGAJI"]
+        for i_l, tl in enumerate(title_lines):
+            draw.text((70 if is_portrait else 180, 140 + i_l * 56), tl, font=f_head, fill=(255, 255, 255, 255))
+
+        covers = _load_book_cover_images_from_env()
+        mid_y = 320 if is_portrait else 280
+        box_h = 680 if is_portrait else 480
+        if covers:
+            n_cov = min(3, len(covers))
+            slot_w = (W - 160) // n_cov
+            for idx_c, cpath in enumerate(covers[:3]):
+                try:
+                    cim = Image.open(cpath).convert("RGB")
+                    tw = min(slot_w - 30, int(cim.width * (box_h / float(max(1, cim.height)))))
+                    cim = cim.resize((max(180, tw), box_h), Image.Resampling.LANCZOS)
+                    cx = 80 + idx_c * slot_w + (slot_w - cim.width) // 2
+                    draw.rounded_rectangle([cx - 6, mid_y - 6, cx + cim.width + 6, mid_y + box_h + 6], radius=18, fill=(255, 208, 0, 255))
+                    canvas.paste(cim.convert("RGBA"), (cx, mid_y))
+                except Exception:
+                    pass
+        else:
+            # Visual 3 kartu Jilid 1, 2, 3 elegan jika gambar sampul belum diunggah ke 00_Assets
+            for j_idx, j_col in enumerate([(16, 88, 68), (18, 76, 98), (92, 68, 18)]):
+                cw = 280 if is_portrait else 380
+                ch = 360 if is_portrait else 420
+                cx = (W - (3 * cw + 60)) // 2 + j_idx * (cw + 30)
+                cy = mid_y + 20
+                draw.rounded_rectangle([cx, cy, cx + cw, cy + ch], radius=22, fill=j_col + (255,), outline=(255, 208, 0, 255), width=4)
+                draw.text((cx + 42, cy + 60), f"JILID {j_idx + 1}", font=f_head, fill=(255, 216, 35, 255))
+                draw.text((cx + 32, cy + 140), "Buku Catatan\n& Aktivitas\nMengaji", font=f_sub, fill=(255, 255, 255, 245))
+
+        bot_y = H - 340 if is_portrait else H - 220
+        draw.rounded_rectangle([68, bot_y, W - 68, bot_y + 145], radius=22, fill=(12, 62, 48, 248), outline=(255, 208, 0, 255), width=4)
+        draw.text((100, bot_y + 24), "📗 Jilid 1   •   📘 Jilid 2   •   📙 Jilid 3   (Tersedia di Shopee)", font=f_sub, fill=(255, 220, 40, 255))
+        draw.text((100, bot_y + 78), "👉 Klik Link Pemesanan Resmi di Deskripsi & Komentar Pertama Video Ini!", font=f_pill, fill=(255, 255, 255, 255))
+        canvas.convert("RGB").save(bumper_png, "PNG")
+
+        vo_text = "Miliki juga Buku Catatan dan Aktivitas Perkembangan Mengaji Jilid satu, dua, dan tiga melalui link Shopee di deskripsi atau kolom komentar video ini."
+        tts_done = False
+        try:
+            import edge_tts
+            async def _save_vo():
+                comm = edge_tts.Communicate(text=vo_text, voice="id-ID-ArdiNeural", rate="+4%")
+                await comm.save(bumper_mp3)
+            asyncio.run(_save_vo())
+            tts_done = os.path.exists(bumper_mp3) and os.path.getsize(bumper_mp3) > 800
+        except Exception:
+            pass
+        if not tts_done:
+            from gtts import gTTS
+            gTTS(text=vo_text, lang="id", slow=False).save(bumper_mp3)
+
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-loop", "1", "-i", bumper_png, "-i", bumper_mp3,
+                "-vf", f"fps=30,scale={W}:{H},setsar=1,format=yuv420p,fade=t=in:st=0:d=0.25",
+                "-af", "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+                "-c:a", "aac", "-b:a", "192k", "-shortest", bumper_mp4,
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+        )
+        return bumper_mp4 if os.path.exists(bumper_mp4) else None
+    except Exception as e:
+        print(f"[INFO BUMPER BUKU] Dilewati ({e})")
+        return None
+
+
 def render_final_video(
     input_video_path: str,
     outro_video_path: str,
@@ -282,63 +439,88 @@ def render_final_video(
     force_portrait: Optional[bool] = None,
 ) -> float:
     """
-    Memproses video secara lengkap dengan FFmpeg (TANPA SUBTITLE sesuai permintaan):
+    Memproses video secara lengkap dengan FFmpeg:
     1. Otomatis mendeteksi apakah video Landscape (1920x1080) atau Portrait Shorts (1080x1920).
-    2. Memotong 4 detik terakhir dari durasi nyata video utama (menghilangkan logo NotebookLM).
-    3. Menambahkan logo Islamic K1 ukuran kecil di pojok kanan atas sepanjang video.
-    4. Menyambungkan video SUBSCRIBE ISLAMIC K1 di akhir video (atau menyesuaikan ke 9:16 untuk Shorts).
+    2. Memotong ekor akhir sesuai `cut_last_seconds` (Smart Salam Trim / 4s).
+    3. Menampilkan Pop-Up Lower-Third Banner Buku Mengaji Jilid 1-3 selama 6 detik di pertengahan video (Usulan 3).
+    4. Menyelipkan Kartu Visual + Suara Narator Promosi Buku Mengaji (Usulan 2) sebelum video SUBSCRIBE ISLAMIC K1.
+    5. Menambahkan logo Islamic K1 ukuran kecil di pojok kanan atas sepanjang video.
     """
     original_duration = get_video_duration(input_video_path)
     trimmed_duration = max(1.0, original_duration - cut_last_seconds)
     is_vert = is_portrait_video(input_video_path) if force_portrait is None else force_portrait
+    work_dir = os.path.dirname(os.path.abspath(output_video_path))
 
-    if is_vert:
-        # Mode Vertikal 9:16 (1080x1920) untuk Video Potret NotebookLM -> YouTube Shorts
+    # Buat Pop-Up Lower-Third PNG (Usulan 3) & Klip Bumper Buku Mengaji (Usulan 2)
+    lt_png = os.path.join(work_dir, "lower_third_promo.png")
+    _create_lower_third_promo_png(lt_png, fonts_dir, is_portrait=is_vert)
+    lt_start = min(35.0, max(4.0, trimmed_duration * 0.35))
+    lt_end = min(trimmed_duration - 0.5, lt_start + 6.5)
+
+    bumper_mp4 = _build_product_bumper_mp4(work_dir, fonts_dir, is_portrait=is_vert)
+    target_w, target_h = (1080, 1920) if is_vert else (1920, 1080)
+    pad_col = ":color=#051c14" if is_vert else ""
+    logo_w = 120 if is_vert else 110
+    logo_pos = "W-w-32:36" if is_vert else "W-w-30:25"
+
+    if bumper_mp4 and os.path.exists(bumper_mp4):
         filter_complex = (
             f"[0:v]trim=0:{trimmed_duration:.3f},setpts=PTS-STARTPTS,"
-            f"scale=1080:1920:force_original_aspect_ratio=decrease,"
-            f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[main_v];"
+            f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
+            f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2{pad_col},setsar=1,fps=30,format=yuv420p[v0_raw];"
+            f"[v0_raw][4:v]overlay=0:0:enable='between(t,{lt_start:.2f},{lt_end:.2f})',format=yuv420p[main_v];"
             f"[0:a]atrim=0:{trimmed_duration:.3f},asetpts=PTS-STARTPTS,"
             f"aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[main_a];"
-            f"[1:v]scale=1080:1920:force_original_aspect_ratio=decrease,"
-            f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=#051c14,setsar=1,fps=30,format=yuv420p[outro_v];"
+            f"[3:v]scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
+            f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2{pad_col},setsar=1,fps=30,format=yuv420p[bump_v];"
+            f"[3:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[bump_a];"
+            f"[1:v]scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
+            f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2{pad_col},setsar=1,fps=30,format=yuv420p[outro_v];"
             f"[1:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[outro_a];"
-            f"[main_v][main_a][outro_v][outro_a]concat=n=2:v=1:a=1[joined_v][joined_a];"
-            f"[2:v]scale=120:-1[logo_small];"
-            f"[joined_v][logo_small]overlay=W-w-32:36:format=auto,format=yuv420p[final_v]"
+            f"[main_v][main_a][bump_v][bump_a][outro_v][outro_a]concat=n=3:v=1:a=1[joined_v][joined_a];"
+            f"[2:v]scale={logo_w}:-1[logo_small];"
+            f"[joined_v][logo_small]overlay={logo_pos}:format=auto,format=yuv420p[final_v]"
         )
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", input_video_path,
+            "-i", outro_video_path,
+            "-i", logo_path,
+            "-i", bumper_mp4,
+            "-i", lt_png,
+            "-filter_complex", filter_complex,
+            "-map", "[final_v]", "-map", "[joined_a]",
+            "-c:v", "libx264", "-preset", "faster", "-crf", "21",
+            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+            output_video_path,
+        ]
     else:
         filter_complex = (
             f"[0:v]trim=0:{trimmed_duration:.3f},setpts=PTS-STARTPTS,"
-            f"scale=1920:1080:force_original_aspect_ratio=decrease,"
-            f"pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[main_v];"
+            f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
+            f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2{pad_col},setsar=1,fps=30,format=yuv420p[v0_raw];"
+            f"[v0_raw][3:v]overlay=0:0:enable='between(t,{lt_start:.2f},{lt_end:.2f})',format=yuv420p[main_v];"
             f"[0:a]atrim=0:{trimmed_duration:.3f},asetpts=PTS-STARTPTS,"
             f"aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[main_a];"
-            f"[1:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
-            f"pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[outro_v];"
+            f"[1:v]scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
+            f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2{pad_col},setsar=1,fps=30,format=yuv420p[outro_v];"
             f"[1:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[outro_a];"
             f"[main_v][main_a][outro_v][outro_a]concat=n=2:v=1:a=1[joined_v][joined_a];"
-            f"[2:v]scale=110:-1[logo_small];"
-            f"[joined_v][logo_small]overlay=W-w-30:25:format=auto,format=yuv420p[final_v]"
+            f"[2:v]scale={logo_w}:-1[logo_small];"
+            f"[joined_v][logo_small]overlay={logo_pos}:format=auto,format=yuv420p[final_v]"
         )
-
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i", input_video_path,
-        "-i", outro_video_path,
-        "-i", logo_path,
-        "-filter_complex", filter_complex,
-        "-map", "[final_v]",
-        "-map", "[joined_a]",
-        "-c:v", "libx264",
-        "-preset", "faster",
-        "-crf", "21",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-movflags", "+faststart",
-        output_video_path,
-    ]
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", input_video_path,
+            "-i", outro_video_path,
+            "-i", logo_path,
+            "-i", lt_png,
+            "-filter_complex", filter_complex,
+            "-map", "[final_v]", "-map", "[joined_a]",
+            "-c:v", "libx264", "-preset", "faster", "-crf", "21",
+            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+            output_video_path,
+        ]
 
     subprocess.run(cmd, check=True)
     return get_video_duration(output_video_path)

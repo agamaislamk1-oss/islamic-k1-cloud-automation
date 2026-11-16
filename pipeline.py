@@ -619,6 +619,29 @@ def prepare_assets(drive, assets_folder_id: str, work_dir: str) -> Tuple[str, st
     except Exception:
         pass
 
+    # Unduh otomatis Gambar Sampul Buku Catatan & Aktivitas Mengaji jika ditaruh pengguna di folder `00_Assets`
+    covers_dir = os.path.join(work_dir, "book_covers")
+    os.makedirs(covers_dir, exist_ok=True)
+    try:
+        q_cov = (
+            f"'{assets_folder_id}' in parents and trashed = false and name != 'logo.png' and "
+            f"(mimeType contains 'image/' or name contains '.jpg' or name contains '.jpeg' or name contains '.png' or name contains '.webp')"
+        )
+        cov_files = (
+            drive.files()
+            .list(q=q_cov, fields="files(id, name)", orderBy="name asc", pageSize=6)
+            .execute(num_retries=3)
+            .get("files", [])
+        )
+        for idx_c, cf in enumerate(cov_files[:3]):
+            ext_c = os.path.splitext(cf["name"])[1].lower() or ".jpg"
+            c_dst = os.path.join(covers_dir, f"book_cover_{idx_c:02d}_{cf['name']}")
+            download_drive_file(drive, cf["id"], c_dst)
+            print(f"[ASET SAMPUL BUKU] Berhasil memuat sampul buku dari 00_Assets: {cf['name']}")
+    except Exception as cov_err:
+        print(f"[INFO SAMPUL BUKU] Menggunakan sampul buku default ({cov_err})")
+    os.environ["ISLAMICK1_BOOK_COVERS_DIR"] = covers_dir
+
     return logo_dest, outro_dest, font_dest
 
 
@@ -1013,6 +1036,7 @@ def process_google_form_explainer_queue(
                 uploaded_video_id = response_yt["id"]
                 print(f"[YOUTUBE FORM] Berhasil diunggah! Link: https://youtu.be/{uploaded_video_id}")
                 print("[YOUTUBE FORM] Sesuai pengaturan: Tidak membuat/mengganti thumbnail otomatis (Thumbnail diatur manual oleh Anda).")
+                post_official_promo_comment_if_needed(youtube, uploaded_video_id)
 
                 # Masukkan ke Playlist yang sesuai
                 try:
@@ -1102,6 +1126,7 @@ def process_google_form_explainer_queue(
                         del sh_media_yt
                         sh_vid_id = sh_resp["id"]
                         print(f"[YOUTUBE SHORTS 9:16] Berhasil diunggah! Link Shorts: https://youtube.com/shorts/{sh_vid_id}")
+                        post_official_promo_comment_if_needed(youtube, sh_vid_id)
                         history_data["last_scheduled_iso"] = shorts_pub_iso
                         history_data[" processed_form_requests" if False else "processed_form_requests"][norm_key]["shorts_video_id"] = sh_vid_id
                         history_file_id = save_upload_history(drive, root_id, history_data, history_file_id)
@@ -1253,6 +1278,7 @@ def process_image_shorts_queue(
 
                 vid_id = resp_yt["id"]
                 print(f"[YOUTUBE GAMBAR SHORTS] Berhasil diunggah! Link: https://youtube.com/shorts/{vid_id}")
+                post_official_promo_comment_if_needed(youtube, vid_id)
 
                 try:
                     add_video_to_matching_playlists(
@@ -1395,11 +1421,13 @@ def upgrade_legacy_channel_videos_metadata(
             except Exception:
                 pass
 
+            post_official_promo_comment_if_needed(youtube, vid_id)
+
             item["description"] = snippet["description"]
             upgraded_set.add(vid_id)
             history_data["upgraded_full_desc_video_ids"] = list(upgraded_set)
             history_file_id = save_upload_history(drive, root_id, history_data, history_file_id)
-            print(f"  [OK UPGRADE CHANNEL] '{cur_title}' ({vid_id}) -> Deskripsi 3 Paragraf + Buku Mengaji Jilid 1-3 + Timeline + 10 Bahasa + Playlist!")
+            print(f"  [OK UPGRADE CHANNEL] '{cur_title}' ({vid_id}) -> Deskripsi 3 Paragraf + Buku Mengaji Jilid 1-3 + Komentar Resmi + 10 Bahasa + Playlist!")
         except HttpError as he:
             if "quotaExceeded" in str(he):
                 print("[INFO KUOTA] Kuota harian YouTube tercapai saat upgrade deskripsi video lama, akan dilanjutkan otomatis besok.")
@@ -1407,6 +1435,238 @@ def upgrade_legacy_channel_videos_metadata(
             print(f"  [LEWATI] Gagal update {vid_id}: {he}")
         except Exception as e:
             print(f"  [LEWATI] Gagal update {vid_id}: {e}")
+
+    return history_file_id
+
+
+_BAD_OR_PROFANE_WORDS = (
+    # Kata kasar / umpatan bahasa Indonesia & daerah
+    "anjing", "anjir", "anjay", "babi", "monyet", "bangsat", "brengsek", "bajingan", "keparat",
+    "tolol", "goblok", "idiot", "bego", "bodoh banget", "sinting", "edan", "kampret", "sialan",
+    "tai", "tahi", "kontol", "memek", "jembut", "ngentot", "peju", "pelacur", "lonte", "jablay",
+    "asu", "jancok", "jancuk", "cuk", "cok", "matamu", "ndasmu", "perek", "bencong", "banci",
+    # Kata kasar bahasa Inggris
+    "fuck", "shit", "bitch", "asshole", "bastard", "dick", "pussy", "whore", "slut", "stfu",
+    # Judi online / spam / pornografi / ujaran kebencian
+    "slot gacor", "gacor", "maxwin", "judol", "togel", "poker online", "zeus slot", "situs slot",
+    "bokep", "porno", "xnxx", "xvideos", "open bo", "sesat lo", "kafir lo", "munafik lo",
+)
+
+
+def _is_bad_or_profane_comment(text: str) -> bool:
+    """Mendeteksi apakah komentar mengandung kata kasar, hinaan, ujaran kebencian, atau promosi judi/spam."""
+    low = re.sub(r"[^a-zA-Z0-9\s]", " ", (text or "").lower())
+    low_compact = re.sub(r"\s+", " ", low).strip()
+    for bad in _BAD_OR_PROFANE_WORDS:
+        if " " in bad:
+            if bad in low_compact:
+                return True
+        else:
+            if re.search(rf"\b{re.escape(bad)}\b", low_compact):
+                return True
+    return False
+
+
+def _generate_polite_islamic_comment_reply(author_name: str, comment_text: str, gemini_api_key: str) -> str:
+    """
+    Menyusun balasan komentar yang sangat sopan, hangat, mengapresiasi, dan bernuansa Islami,
+    serta mengingatkan dengan santun tentang Buku Catatan & Aktivitas Perkembangan Mengaji.
+    """
+    clean_author = re.sub(r"^@", "", (author_name or "Sahabat Muslim").strip())[:32]
+    low_c = (comment_text or "").lower()
+    starts_with_salam = any(k in low_c for k in ("assalamu", "asalamu", "salam"))
+
+    try:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(
+            api_key=gemini_api_key,
+            http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)),
+        )
+        prompt = (
+            f"Anda adalah admin resmi channel dakwah & edukasi keluarga Muslim 'Islamic K1'.\n"
+            f"Penonton bernama '{clean_author}' menulis komentar: \"{comment_text}\"\n"
+            f"Tuliskan balasan komentar singkat (2-3 kalimat) yang sangat sopan, mengapresiasi, hangat, dan Islami "
+            f"(awali dengan Wa'alaikumussalam Warahmatullahi Wabarakatuh jika mereka memberi salam, atau Alhamdulillah/Jazakumullahu Khairan jika tidak). "
+            f"Di kalimat terakhir, ajak dengan ramah untuk melihat Buku Catatan Materi & Aktivitas Perkembangan Mengaji Jilid 1-3 di deskripsi video."
+        )
+        resp = client.models.generate_content(
+            model="gemini-3.5-flash-lite",
+            contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.35),
+        )
+        reply = (resp.text or "").strip().strip('"')
+        if len(reply) >= 25:
+            return reply[:480]
+    except Exception:
+        pass
+
+    greeting = (
+        f"Wa'alaikumussalam Warahmatullahi Wabarakatuh Kak {clean_author}. "
+        if starts_with_salam
+        else f"Alhamdulillah, Jazakumullahu Khairan Kak {clean_author} atas komentar dan kehadirannya di channel Islamic K1. "
+    )
+    return (
+        f"{greeting}Semoga materi pada video ini membawa manfaat dan keberkahan bagi keluarga tercinta. "
+        f"Jangan lupa cek juga Buku Catatan Materi & Aktivitas Perkembangan Mengaji (Jilid 1, 2, & 3) di deskripsi video ya. Barakallahu fiikum 🙏✨"
+    )
+
+
+def post_official_promo_comment_if_needed(youtube, video_id: str) -> None:
+    """
+    Usulan 1: Menuliskan Komentar Pertama Resmi di bawah video (agar penonton HP yang membuka komentar
+    langsung bisa mengklik link Shopee Buku Catatan Materi & Aktivitas Perkembangan Mengaji Jilid 1-3).
+    """
+    if not youtube or not video_id:
+        return
+    try:
+        res = (
+            youtube.commentThreads()
+            .list(part="snippet", videoId=video_id, maxResults=20, textFormat="plainText")
+            .execute(num_retries=2)
+        )
+        for item in res.get("items", []):
+            top_snip = item.get("snippet", {}).get("topLevelComment", {}).get("snippet", {})
+            author_ch = top_snip.get("authorChannelId", {}).get("value", "")
+            txt = top_snip.get("textDisplay", "")
+            if author_ch == EXPECTED_CHANNEL_ID and "id.shp.ee/oQa2tEh" in txt:
+                return  # Komentar resmi buku mengaji sudah ada di video ini
+
+        comment_text = (
+            "Assalamu'alaikum Warahmatullahi Wabarakatuh 🌟\n"
+            "Terima kasih telah menyimak video edukasi di channel resmi Islamic K1!\n\n"
+            "📖 MILIKI BUKU CATATAN MATERI & AKTIVITAS PERKEMBANGAN MENGAJI:\n"
+            "Islamic Studies - Buku Catatan Materi & Aktivitas Perkembangan Mengaji\n"
+            "Dampingi buah hati & santri belajar mengaji lebih terarah, rapi, dan bersemangat setiap hari:\n"
+            "📗 Jilid 1 : https://id.shp.ee/oQa2tEh\n"
+            "📘 Jilid 2 : https://id.shp.ee/Cpwj7ZA\n"
+            "📙 Jilid 3 : https://id.shp.ee/xgWDkq5\n\n"
+            "🤝 Dukung Dakwah Yayasan Bekal Kebaikan Anak Bangsa:\n"
+            "👉 https://linktr.ee/bekalkebaikan\n"
+            "Jazakumullahu Khairan. Wassalamu'alaikum Warahmatullahi Wabarakatuh 🙏✨"
+        )
+        youtube.commentThreads().insert(
+            part="snippet",
+            body={
+                "snippet": {
+                    "videoId": video_id,
+                    "topLevelComment": {"snippet": {"textOriginal": comment_text}},
+                }
+            },
+        ).execute(num_retries=2)
+        print(f"[AUTO-COMMENT BUKU] Komentar promosi resmi Buku Mengaji Jilid 1-3 dipasang di video {video_id}!")
+    except Exception as e:
+        print(f"[INFO AUTO-COMMENT] Dilewati pada video {video_id} ({str(e)[:80]})")
+
+
+def moderate_and_reply_channel_comments(
+    youtube,
+    drive,
+    root_id: str,
+    history_data: Dict[str, Any],
+    history_file_id: Optional[str],
+    gemini_api_key: str,
+    max_replies_per_run: int = 12,
+) -> Optional[str]:
+    """
+    Memeriksa seluruh komentar yang masuk di semua video channel Islamic K1 (baik komentar lama maupun baru):
+    1. Menghapus/menolak otomatis semua komentar buruk, kata kasar, hinaan, ujaran kebencian, atau spam judi.
+    2. Menjawab otomatis semua komentar baik dari penonton dengan kalimat yang sopan, mengapresiasi, dan Islami.
+    """
+    replied_ids = set(history_data.get("replied_comment_ids", []))
+    moderated_bad_ids = set(history_data.get("moderated_bad_comment_ids", []))
+    changed = False
+    replies_sent = 0
+
+    try:
+        res = (
+            youtube.commentThreads()
+            .list(
+                part="snippet,replies",
+                allThreadsRelatedToChannelId=EXPECTED_CHANNEL_ID,
+                maxResults=50,
+                textFormat="plainText",
+            )
+            .execute(num_retries=3)
+        )
+    except Exception as e:
+        print(f"[INFO MODERASI KOMENTAR] Tidak dapat memuat daftar komentar saat ini ({str(e)[:80]}).")
+        return history_file_id
+
+    for thread in res.get("items", []):
+        top_obj = thread.get("snippet", {}).get("topLevelComment", {})
+        top_id = top_obj.get("id", "")
+        top_snip = top_obj.get("snippet", {})
+        author_ch = top_snip.get("authorChannelId", {}).get("value", "")
+        author_name = top_snip.get("authorDisplayName", "Sahabat Muslim")
+        text_orig = top_snip.get("textDisplay", "") or top_snip.get("textOriginal", "")
+
+        if not top_id:
+            continue
+
+        # 1. Cek apakah komentar utama mengandung kata kasar / buruk / spam judi -> Hapus!
+        if author_ch != EXPECTED_CHANNEL_ID and _is_bad_or_profane_comment(text_orig):
+            if top_id not in moderated_bad_ids:
+                try:
+                    youtube.comments().setModerationStatus(id=top_id, moderationStatus="rejected").execute(num_retries=2)
+                    print(f"[HAPUS KOMENTAR BURUK] Komentar tidak pantas dari '{author_name}' berhasil dihapus/ditolak!")
+                except Exception:
+                    try:
+                        youtube.comments().delete(id=top_id).execute(num_retries=2)
+                    except Exception:
+                        pass
+                moderated_bad_ids.add(top_id)
+                changed = True
+            continue
+
+        # Cek juga sub-komentar (replies) jika ada komentar kasar di dalam balasan
+        existing_replies = thread.get("replies", {}).get("comments", [])
+        already_replied_by_owner = False
+        for rep in existing_replies:
+            rep_id = rep.get("id", "")
+            rep_snip = rep.get("snippet", {})
+            rep_ch = rep_snip.get("authorChannelId", {}).get("value", "")
+            rep_txt = rep_snip.get("textDisplay", "")
+            if rep_ch == EXPECTED_CHANNEL_ID:
+                already_replied_by_owner = True
+            elif _is_bad_or_profane_comment(rep_txt) and rep_id not in moderated_bad_ids:
+                try:
+                    youtube.comments().setModerationStatus(id=rep_id, moderationStatus="rejected").execute(num_retries=2)
+                    print(f"[HAPUS BALASAN BURUK] Balasan tidak pantas ({rep_id}) berhasil dihapus!")
+                except Exception:
+                    pass
+                moderated_bad_ids.add(rep_id)
+                changed = True
+
+        # 2. Balas otomatis komentar baik dari penonton yang belum dijawab
+        if author_ch == EXPECTED_CHANNEL_ID or already_replied_by_owner or top_id in replied_ids:
+            if already_replied_by_owner and top_id not in replied_ids:
+                replied_ids.add(top_id)
+                changed = True
+            continue
+
+        if replies_sent < max_replies_per_run:
+            try:
+                reply_msg = _generate_polite_islamic_comment_reply(author_name, text_orig, gemini_api_key)
+                youtube.comments().insert(
+                    part="snippet",
+                    body={"snippet": {"parentId": top_id, "textOriginal": reply_msg}},
+                ).execute(num_retries=2)
+                replied_ids.add(top_id)
+                replies_sent += 1
+                changed = True
+                print(f"[BALAS KOMENTAR ISLAMI] Menjawab komentar '{author_name}': \"{reply_msg[:75]}...\"")
+            except HttpError as he:
+                if "quotaExceeded" in str(he):
+                    break
+            except Exception as rep_err:
+                print(f"[INFO BALAS KOMENTAR] Lewati {top_id} ({str(rep_err)[:70]})")
+
+    if changed:
+        history_data["replied_comment_ids"] = list(replied_ids)
+        history_data["moderated_bad_comment_ids"] = list(moderated_bad_ids)
+        history_file_id = save_upload_history(drive, root_id, history_data, history_file_id)
 
     return history_file_id
 
@@ -1632,6 +1892,7 @@ def run_queue_pipeline():
                 uploaded_video_id = response_yt["id"]
                 print(f"[YOUTUBE] Berhasil diunggah! Link: https://youtu.be/{uploaded_video_id}")
                 print("[YOUTUBE] Sesuai pengaturan: Video NotebookLM tidak menggunakan pembuatan thumbnail otomatis.")
+                post_official_promo_comment_if_needed(youtube, uploaded_video_id)
 
                 # Masukkan ke Playlist sesuai Kelas PAI / topik
                 try:
@@ -1776,6 +2037,21 @@ def run_queue_pipeline():
         )
     except Exception as up_desc_err:
         print(f"[INFO UPGRADE DESKRIPSI] Dilewati sementara ({up_desc_err}).")
+
+    # 7. Moderasi Komentar Buruk/Kasar & Balas Otomatis Semua Komentar Baik secara Sopan & Islami
+    try:
+        youtube, drive = get_google_services()
+        history_file_id = moderate_and_reply_channel_comments(
+            youtube=youtube,
+            drive=drive,
+            root_id=root_id,
+            history_data=history_data,
+            history_file_id=history_file_id,
+            gemini_api_key=gemini_api_key,
+            max_replies_per_run=12,
+        )
+    except Exception as mod_err:
+        print(f"[INFO MODERASI KOMENTAR] Dilewati sementara ({mod_err}).")
 
 
 if __name__ == "__main__":
