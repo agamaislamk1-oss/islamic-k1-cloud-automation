@@ -12,7 +12,31 @@ import re
 import time
 import json
 import subprocess
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+
+
+def get_islamic_k1_promo_and_donation_block() -> str:
+    """
+    Blok Resmi Promosi Buku Catatan Materi & Aktivitas Perkembangan Mengaji (Jilid 1, 2, 3)
+    serta Donasi Yayasan Bekal Kebaikan Anak Bangsa yang WAJIB tampil di semua video Islamic K1.
+    """
+    return (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "📖 MILIKI BUKU CATATAN MATERI & AKTIVITAS PERKEMBANGAN MENGAJI:\n"
+        "Islamic Studies - Buku Catatan Materi & Aktivitas Perkembangan Mengaji\n"
+        "Bantu anak & santri belajar mengaji lebih terarah, rapi, dan semangat setiap hari! Pesan langsung melalui link resmi berikut:\n"
+        "📗 Jilid 1 : https://id.shp.ee/oQa2tEh\n"
+        "📘 Jilid 2 : https://id.shp.ee/Cpwj7ZA\n"
+        "📙 Jilid 3 : https://id.shp.ee/xgWDkq5\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "🤝 DUKUNG DAKWAH & TEBAR KEBAIKAN:\n"
+        "Teman teman, apakah kalian terbantu dengan video ini? Dukung kami dengan berdonasi di Yayasan Bekal Kebaikan Anak Bangsa, agar kami dapat terus menebar kebaikan bagi sesama. Dukungan kalian sangat berarti bagi kami.\n"
+        "Silahkan klik : https://linktr.ee/bekalkebaikan. Jazakallah. Terima Kasih.\n\n"
+        "Tim Islamic K1\n"
+        "Instagram : https://www.instagram.com/islamic_k1\n"
+        "YouTube : https://www.youtube.com/@islamick1832\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
 
 
 def extract_compressed_audio(video_path: str, audio_output_path: str, max_duration: float) -> str:
@@ -381,12 +405,14 @@ Kembalikan output dalam JSON murni dengan struktur persis:
     opening_and_body = "\n\n".join(paragraphs[:-1])
     closing_paragraph = paragraphs[-1]
 
+    promo_block = get_islamic_k1_promo_and_donation_block()
+
     full_description = (
         f"{opening_and_body}\n\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📌 TIMELINE / CHAPTER PEMBAHASAN:\n"
         f"{timeline_str}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{promo_block}\n\n"
         f"{closing_paragraph}\n\n"
         f"{hashtags_str}"
     )
@@ -406,6 +432,137 @@ Kembalikan output dalam JSON murni dengan struktur persis:
                 try:
                     tr_t = GoogleTranslator(source="id", target=lg).translate(base_t)[:95]
                     tr_d = GoogleTranslator(source="id", target=lg).translate(full_description[:3500])[:4800]
+                    locs[lg] = {"title": tr_t, "description": tr_d}
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    data["localizations"] = locs
+    return data
+
+
+def generate_complete_metadata_from_title_or_image(
+    title_or_filename: str,
+    duration: float,
+    gemini_api_key: str,
+    image_path: str = "",
+    is_shorts: bool = False,
+) -> Dict[str, Any]:
+    """
+    Menyusun paket Metadata YouTube Lengkap (Judul, Deskripsi 3 Paragraf + Salam + Blok Buku Mengaji Jilid 1-3 & Donasi,
+    Timeline/Chapters, Hashtags, Tags, Playlist, dan Terjemahan 10 Bahasa Dunia) dari:
+    - Gambar yang diunggah ke folder `05_Antrian_Gambar_Shorts` (menggunakan Gemini Vision jika ada image_path), ATAU
+    - Judul video lama di channel Islamic K1 yang belum memiliki deskripsi lengkap.
+    """
+    clean_base = os.path.splitext(title_or_filename)[0]
+    clean_base = re.sub(r"[_\-]+", " ", clean_base).strip()
+
+    prompt = f"""
+Anda adalah pakar konten dakwah & edukasi Islami untuk channel YouTube resmi **Islamic K1** (@islamick1832).
+Sumber konten: "{clean_base}" (Durasi: {duration:.1f} detik, Mode Shorts: {is_shorts}).
+Jika ada gambar terlampir, baca teks/pesan Islami di dalam gambar tersebut secara akurat.
+
+TUGAS ANDA:
+Susun JSON murni berisi:
+1. `title`: Judul YouTube Islami yang menarik (maks 85 karakter{', akhiri dengan #Shorts' if is_shorts else ''}).
+2. `description_paragraphs`: Array berisi tepat 3 paragraf:
+   - Paragraf 1 WAJIB diawali "Assalamu'alaikum Warahmatullahi Wabarakatuh." dan memperkenalkan isi materi dengan hangat untuk keluarga Muslim.
+   - Paragraf 2 mengulas hikmah, pelajaran penting, atau kandungan materi secara mendalam.
+   - Paragraf 3 berisi kesimpulan, doa kebaikan, ajakan Subscribe channel Islamic K1, dan WAJIB diakhiri "Wassalamu'alaikum Warahmatullahi Wabarakatuh."
+3. `chapters`: Array minimal 3 titik waktu `[{{"time_seconds": 0, "title": "..."}}, ...]` yang proporsional dengan durasi {duration:.1f} detik.
+4. `hashtags`: Array 6 hashtag relevan (wajib ada `"#IslamicK1"`{', `"#Shorts"`' if is_shorts else ''}).
+5. `tags`: Array 12 kata kunci SEO YouTube relevan.
+6. `playlist_name`: Nama playlist yang paling cocok (contoh: `"Kajian Keluarga Muslim"`, `"Kisah Teladan Islami"`, atau nama kelas PAI jika terkait pelajaran PAI).
+7. `localizations`: Terjemahan `title` dan ringkasan deskripsi ke 9 bahasa (`"en"`, `"ar"`, `"ms"`, `"tr"`, `"ur"`, `"fr"`, `"de"`, `"es"`, `"ru"`).
+
+Kembalikan HANYA JSON murni.
+"""
+    data = None
+    try:
+        from google import genai
+        from google.genai import types
+        from PIL import Image
+
+        client = genai.Client(
+            api_key=gemini_api_key,
+            http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)),
+        )
+        contents_list: List[Any] = [prompt]
+        if image_path and os.path.exists(image_path):
+            try:
+                im_obj = Image.open(image_path).convert("RGB")
+                im_obj.thumbnail((1024, 1024))
+                contents_list.insert(0, im_obj)
+            except Exception:
+                pass
+
+        for model_name in ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]:
+            try:
+                resp = client.models.generate_content(
+                    model=model_name,
+                    contents=contents_list,
+                    config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.3),
+                )
+                raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", (resp.text or "").strip())
+                parsed = json.loads(raw)
+                if parsed.get("title"):
+                    data = parsed
+                    break
+            except Exception:
+                time.sleep(0.8)
+    except Exception:
+        pass
+
+    if not data:
+        data = build_fallback_metadata(clean_base, duration, [])
+
+    title_final = str(data.get("title") or clean_base).strip()
+    if is_shorts and "#shorts" not in title_final.lower():
+        title_final = f"{title_final[:82]} #Shorts"
+    data["title"] = title_final[:98]
+
+    paragraphs = data.get("description_paragraphs", [])
+    if len(paragraphs) < 3:
+        paragraphs = [
+            f"Assalamu'alaikum Warahmatullahi Wabarakatuh.\nSelamat datang di channel resmi Islamic K1. Pada kesempatan penuh berkah ini, mari kita simak bersama pembahasan dan inspirasi Islami mengenai {clean_base}.",
+            f"Materi tentang {clean_base} ini dirangkum khusus untuk membantu keluarga, pelajar, dan sahabat Muslim mendapatkan ilmu yang bermanfaat, memperkuat iman, serta mengamalkan adab-adab mulia dalam keseharian.",
+            "Semoga ilmu ini menjadi amal jariyah dan penuntun kebaikan bagi kita semua. Jangan lupa klik tombol Subscribe, Like, dan bagikan video channel Islamic K1 ini. Wassalamu'alaikum Warahmatullahi Wabarakatuh.",
+        ]
+    if "assalamu" not in paragraphs[0].lower():
+        paragraphs[0] = "Assalamu'alaikum Warahmatullahi Wabarakatuh.\n\n" + paragraphs[0]
+    if "wassalamu" not in paragraphs[-1].lower():
+        paragraphs[-1] = paragraphs[-1] + "\n\nWassalamu'alaikum Warahmatullahi Wabarakatuh."
+
+    timeline_str = validate_youtube_timeline(data.get("chapters", []), max(15.0, duration))
+    hashtags = data.get("hashtags", ["#IslamicK1", "#KeluargaMuslim", "#EdukasiIslami", "#BelajarMengaji"])
+    if is_shorts and "#Shorts" not in hashtags:
+        hashtags.insert(0, "#Shorts")
+    hashtags_str = " ".join([h if str(h).startswith("#") else f"#{h}" for h in hashtags[:8]])
+
+    promo_block = get_islamic_k1_promo_and_donation_block()
+    full_description = (
+        f"{paragraphs[0]}\n\n"
+        f"{paragraphs[1]}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📌 TIMELINE / CHAPTER PEMBAHASAN:\n"
+        f"{timeline_str}\n"
+        f"{promo_block}\n\n"
+        f"{paragraphs[-1]}\n\n"
+        f"{hashtags_str}"
+    )
+    data["full_description"] = full_description
+    data["timeline_text"] = timeline_str
+
+    locs = data.get("localizations") or {}
+    target_langs = ["en", "ar", "ms", "tr", "ur", "fr", "de", "es", "ru"]
+    missing_langs = [lg for lg in target_langs if lg not in locs or not locs[lg].get("title")]
+    if missing_langs:
+        try:
+            from deep_translator import GoogleTranslator
+            for lg in missing_langs:
+                try:
+                    tr_t = GoogleTranslator(source="id", target=lg).translate(data["title"])[:95]
+                    tr_d = GoogleTranslator(source="id", target=lg).translate(full_description[:3200])[:4800]
                     locs[lg] = {"title": tr_t, "description": tr_d}
                 except Exception:
                     pass

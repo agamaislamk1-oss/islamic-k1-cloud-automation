@@ -1106,15 +1106,31 @@ def _extract_english_search_queries(scene: Dict[str, Any], topic_title: str) -> 
             queries.insert(0, v_en)
 
     if headline:
-        queries.append(f"{topic_title} {headline}")
+        queries.append(f"{topic_title} {headline} Islamic")
+    queries.append(f"{topic_title} Islamic")
     queries.append(topic_title)
     return list(dict.fromkeys([q.strip() for q in queries if q.strip()]))
+
+
+_BLOCKED_NON_ISLAMIC_IMAGE_TERMS = (
+    "church", "cathedral", "chapel", "cross", "crucifix", "jesus", "christ", "buddha", "hindu",
+    "temple", "synagogue", "idol", "statue", "sculpture", "mythology", "goddess", "gods",
+    "wine", "beer", "alcohol", "pork", "bacon", "pig", "dog", "bikini", "swimsuit", "lingerie",
+    "nude", "naked", "sexy", "woman", "girl", "lady", "female", "actress", "model", "singer",
+    "concert", "party", "dance", "nightclub", "casino", "gambling", "tattoo", "portrait_of_a_woman",
+)
+
+
+def _is_clean_islamic_friendly_url(url_or_title: str) -> bool:
+    """Memastikan URL/judul gambar dari internet 100% sopan, layak, dan selaras dengan adab Islami."""
+    low = url_or_title.lower()
+    return not any(bad in low for bad in _BLOCKED_NON_ISLAMIC_IMAGE_TERMS)
 
 
 def _search_wikimedia_and_openverse_urls(queries: List[str], max_results: int = 6) -> List[str]:
     """
     Mencari gambar nyata berlisensi bebas (Public Domain / Creative Commons — 100% Aman & Legal untuk YouTube)
-    dari Wikimedia Commons, Wikipedia, dan Openverse API tanpa memerlukan API Key berbayar.
+    yang cocok dengan topik dan bernuansa Islami/edukatif santun dari Wikimedia Commons & Openverse API.
     """
     import urllib.parse
     import urllib.request
@@ -1125,25 +1141,27 @@ def _search_wikimedia_and_openverse_urls(queries: List[str], max_results: int = 
     for q in queries[:4]:
         if len(found_urls) >= max_results:
             break
-        # 1. Wikimedia Commons Search API (Gambar foto, lukisan sejarah, diagram sains, peta)
+        # 1. Wikimedia Commons Search API (Gambar foto, arsitektur Islam, lukisan sejarah, diagram sains, peta)
         try:
             enc_q = urllib.parse.quote(f"filetype:bitmap {q}")
             wiki_url = (
                 f"https://commons.wikimedia.org/w/api.php?action=query&generator=search"
-                f"&gsrsearch={enc_q}&gsrnamespace=6&gsrlimit=6&prop=imageinfo&iiprop=url|dimensions"
+                f"&gsrsearch={enc_q}&gsrnamespace=6&gsrlimit=8&prop=imageinfo&iiprop=url|dimensions"
                 f"&iiurlwidth=800&format=json"
             )
             req = urllib.request.Request(wiki_url, headers=headers)
             data = json.loads(urllib.request.urlopen(req, timeout=8).read().decode("utf-8", errors="ignore"))
             pages = data.get("query", {}).get("pages", {})
             for _, pinfo in pages.items():
+                title_str = str(pinfo.get("title", ""))
                 ii = (pinfo.get("imageinfo") or [{}])[0]
                 u = ii.get("thumburl") or ii.get("url") or ""
                 w = int(ii.get("width") or 800)
                 h = int(ii.get("height") or 600)
                 if u and w >= 350 and h >= 250 and not u.lower().endswith((".svg", ".gif", ".tif", ".pdf")):
-                    if u not in _USED_INTERNET_IMAGE_URLS and u not in found_urls:
-                        found_urls.append(u)
+                    if _is_clean_islamic_friendly_url(f"{title_str} {u}"):
+                        if u not in _USED_INTERNET_IMAGE_URLS and u not in found_urls:
+                            found_urls.append(u)
         except Exception:
             pass
 
@@ -1151,12 +1169,13 @@ def _search_wikimedia_and_openverse_urls(queries: List[str], max_results: int = 
         if len(found_urls) < max_results:
             try:
                 enc_ov = urllib.parse.quote(q)
-                ov_url = f"https://api.openverse.org/v1/images/?q={enc_ov}&page_size=5"
+                ov_url = f"https://api.openverse.org/v1/images/?q={enc_ov}&license_type=commercial,modification&page_size=6"
                 req = urllib.request.Request(ov_url, headers=headers)
                 ov_data = json.loads(urllib.request.urlopen(req, timeout=8).read().decode("utf-8", errors="ignore"))
                 for item in ov_data.get("results", []):
                     u = item.get("thumbnail") or item.get("url") or ""
-                    if u and not u.lower().endswith((".svg", ".gif")):
+                    t_ov = str(item.get("title", ""))
+                    if u and not u.lower().endswith((".svg", ".gif")) and _is_clean_islamic_friendly_url(f"{t_ov} {u}"):
                         if u not in _USED_INTERNET_IMAGE_URLS and u not in found_urls:
                             found_urls.append(u)
             except Exception:
@@ -1730,8 +1749,8 @@ def render_scene_stage_image(
     odraw.rounded_rectangle([bar_x1, bar_y, bar_x1 + fill_w, bar_y + 14], radius=7, fill=theme["accent"] + (255,))
 
     footer_font = _load_bold_font(20, font_path)
-    odraw.text((bar_x1, 1002), f"ISLAMIC K1 • MOTION FORMAT V2 ({style_tag})", font=footer_font, fill=(255, 255, 255, 195))
-    odraw.text((bar_x2 - 380, 1002), "SUBSCRIBE • LIKE • BAGIKAN KEBAIKAN", font=footer_font, fill=theme["accent"] + (230,))
+    odraw.text((bar_x1, 1002), f"ISLAMIC K1 • {style_tag}", font=footer_font, fill=(255, 255, 255, 195))
+    odraw.text((bar_x2 - 810, 1002), "📖 BUKU CATATAN & AKTIVITAS MENGAJI JILID 1-3 (LINK DI DESKRIPSI)", font=footer_font, fill=theme["accent"] + (245,))
 
     final_img = Image.alpha_composite(base, overlay).convert("RGB")
     final_img.save(output_png_path, "PNG")
@@ -2177,17 +2196,16 @@ def build_complete_explainer_package(
         hashtags.insert(0, "#IslamicK1")
     hashtag_line = " ".join(hashtags[:8])
 
+    from ai_metadata_generator import get_islamic_k1_promo_and_donation_block
+    promo_block = get_islamic_k1_promo_and_donation_block()
+
     full_description = (
         f"{paragraphs[0]}\n\n"
         f"{paragraphs[1]}\n\n"
         f"📌 TIMELINE / CHAPTERS PEMBAHASAN:\n"
-        f"{timeline_block}\n\n"
+        f"{timeline_block}\n"
+        f"{promo_block}\n\n"
         f"{paragraphs[2]}\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🔔 Dukung terus dakwah & edukasi Keluarga Muslim di Channel Resmi Islamic K1:\n"
-        f"👉 https://www.youtube.com/@islamick1832\n"
-        f"🎯 Target Audience: {target_audience}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{hashtag_line}"
     )
 
@@ -2197,7 +2215,7 @@ def build_complete_explainer_package(
             from deep_translator import GoogleTranslator
 
             base_title = explainer_data.get("title", f"{topic_title} | {target_audience} | Islamic K1")
-            base_desc = "\n\n".join(paragraphs)
+            base_desc = full_description[:3400]
             for lang_code in ["en", "ar", "ms", "tr", "ur", "fr", "de", "es", "ru"]:
                 try:
                     tr_title = GoogleTranslator(source="id", target=lang_code).translate(base_title)[:95]
@@ -2212,8 +2230,8 @@ def build_complete_explainer_package(
     shorts_desc = (
         f"{paragraphs[0]}\n\n"
         f"🎬 Ringkasan Cepat 60 Detik (YouTube Shorts) untuk {target_audience}.\n"
-        f"Tonton juga video penjelasan lengkap 3 menitnya di Channel Resmi Islamic K1:\n"
-        f"👉 https://www.youtube.com/@islamick1832\n\n"
+        f"Tonton juga video penjelasan lengkap 3 menitnya di Channel Resmi Islamic K1!\n\n"
+        f"{promo_block}\n\n"
         f"{paragraphs[-1]}\n\n"
         f"#Shorts #IslamicK1 {hashtag_line}"
     )
@@ -2403,7 +2421,7 @@ def render_vertical_shorts_video(
             prog_f = min(1.0, ((b_idx) + (st_i + 1) / 3.0) / 4.0)
             od.rounded_rectangle([56, 1775, W - 56, 1793], radius=9, fill=(255, 255, 255, 45))
             od.rounded_rectangle([56, 1775, 56 + max(28, int((W - 112) * prog_f)), 1793], radius=9, fill=theme["accent"] + (255,))
-            od.text((56, 1810), "ISLAMIC K1 • YOUTUBE SHORTS EDUKASI", font=_load_bold_font(22, font_path), fill=(255, 255, 255, 210))
+            od.text((56, 1810), "📖 BUKU CATATAN & AKTIVITAS MENGAJI JILID 1-3 (CEK DESKRIPSI)", font=_load_bold_font(22, font_path), fill=theme["accent"] + (245,))
 
             Image.alpha_composite(base, ov).convert("RGB").save(png_p, "PNG")
             st_pngs.append(png_p)

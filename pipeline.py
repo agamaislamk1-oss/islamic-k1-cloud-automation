@@ -63,12 +63,18 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 from video_editor import (
     get_video_duration,
+    is_portrait_video,
     create_ass_subtitle,
     create_srt_subtitle,
     render_final_video,
+    render_image_to_shorts_video,
     generate_youtube_thumbnail,
 )
-from ai_metadata_generator import analyze_video_with_gemini
+from ai_metadata_generator import (
+    analyze_video_with_gemini,
+    generate_complete_metadata_from_title_or_image,
+    get_islamic_k1_promo_and_donation_block,
+)
 from book_cover_helper import (
     parse_textbook_metadata,
     format_uniform_youtube_title,
@@ -89,6 +95,7 @@ DRIVE_ASSETS_FOLDER = "00_Assets"
 DRIVE_QUEUE_FOLDER = "01_Antrian_NotebookLM"
 DRIVE_DONE_FOLDER = "02_Sudah_Diupload_YouTube"
 DRIVE_FORM_QUEUE_FOLDER = "03_Antrian_Google_Form_MotionGrafis"
+DRIVE_IMAGE_SHORTS_FOLDER = "05_Antrian_Gambar_Shorts"
 FORM_SHEET_NAME = "Form_Motion_Grafis_IslamicK1"
 HISTORY_FILENAME = "upload_history_islamick1.json"
 
@@ -1131,6 +1138,278 @@ def process_google_form_explainer_queue(
     return processed_form_count, history_file_id, False
 
 
+def process_image_shorts_queue(
+    gemini_api_key: str,
+    root_id: str,
+    assets_id: str,
+    image_queue_id: str,
+    done_id: str,
+    history_data: Dict[str, Any],
+    history_file_id: Optional[str],
+    existing_yt_videos: List[Dict[str, str]],
+) -> Tuple[int, Optional[str], bool]:
+    """
+    Memproses semua gambar (.jpg, .jpeg, .png, .webp) di folder `05_Antrian_Gambar_Shorts`:
+    1. Mengubah gambar (Potret maupun Landscape) menjadi Video YouTube Shorts 9:16 (1080x1920)
+       dengan instrumen bebas copyright tanpa vokal bernuansa Arab/Islami (Maqam Hijaz).
+    2. Menyusun Judul (#Shorts), Deskripsi 3 Paragraf Islami + Buku Mengaji Jilid 1-3 & Donasi,
+       Tag, Timeline, Playlist, dan Terjemahan 10 Bahasa.
+    3. Mengunggah ke YouTube Islamic K1 dan memindahkan gambar ke `02_Sudah_Diupload_YouTube`.
+    """
+    youtube, drive = get_google_services()
+    q_img = (
+        f"'{image_queue_id}' in parents and trashed = false and "
+        f"(mimeType contains 'image/' or name contains '.jpg' or name contains '.jpeg' or name contains '.png' or name contains '.webp')"
+    )
+    img_files = (
+        drive.files()
+        .list(q=q_img, fields="files(id, name, md5Checksum, createdTime)", orderBy="createdTime asc", pageSize=25)
+        .execute(num_retries=4)
+        .get("files", [])
+    )
+    if not img_files:
+        return 0, history_file_id, False
+
+    print(f"[GAMBAR SHORTS] Ditemukan {len(img_files)} gambar di '{DRIVE_IMAGE_SHORTS_FOLDER}'. Memproses menjadi YouTube Shorts...")
+    processed_img_count = 0
+
+    for img_f in img_files:
+        dup, reason = is_already_uploaded(img_f, history_data, existing_yt_videos, youtube=youtube)
+        if dup:
+            print(f"[SKIP GAMBAR SHORTS] '{img_f['name']}' sudah pernah diupload ({reason}).")
+            move_drive_file(drive, img_f["id"], image_queue_id, done_id)
+            continue
+
+        print("=================================================================")
+        print(f"[PROSES GAMBAR SHORTS #{processed_img_count + 1}] {img_f['name']} (ID: {img_f['id']})")
+        print("=================================================================")
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="islamick1_imgshort_", ignore_cleanup_errors=True) as work_dir:
+                logo_path, outro_path, font_path = prepare_assets(drive, assets_id, work_dir)
+                ext = os.path.splitext(img_f["name"])[1].lower() or ".jpg"
+                raw_img_path = os.path.join(work_dir, f"input_image{ext}")
+                download_drive_file(drive, img_f["id"], raw_img_path)
+
+                short_mp4 = os.path.join(work_dir, "final_image_short.mp4")
+                print("[FFMPEG GAMBAR SHORTS] Mengubah gambar menjadi Video Shorts 9:16 + Instrumen Arab/Islami Tanpa Vokal...")
+                final_dur = render_image_to_shorts_video(
+                    image_path=raw_img_path,
+                    logo_path=logo_path,
+                    font_path=font_path,
+                    output_video_path=short_mp4,
+                    duration_sec=20.0,
+                )
+
+                print("[AI GAMBAR SHORTS] Menyusun Judul, Deskripsi + Buku Mengaji, Timeline, Tag, & Terjemahan 10 Bahasa...")
+                ai_data = generate_complete_metadata_from_title_or_image(
+                    title_or_filename=img_f["name"],
+                    duration=final_dur,
+                    gemini_api_key=gemini_api_key,
+                    image_path=raw_img_path,
+                    is_shorts=True,
+                )
+
+                publish_at_iso = compute_next_prime_time_utc(
+                    recommended_slot="SIANG",
+                    last_scheduled_iso=history_data.get("last_scheduled_iso"),
+                )
+                md5_ref = (img_f.get("md5Checksum") or img_f["id"])[:10]
+                full_description = f"{ai_data['full_description']}\n\n[Ref:IMG_{md5_ref}]"
+
+                locs = ai_data.get("localizations", {})
+                locs["id"] = {"title": ai_data["title"][:100], "description": full_description[:4900]}
+
+                video_body = {
+                    "snippet": {
+                        "title": ai_data["title"][:100],
+                        "description": full_description[:4900],
+                        "tags": (ai_data.get("tags", ["IslamicK1", "Shorts", "BelajarMengaji"])[:12] + ["Shorts", "YouTubeShorts", "IslamicK1"]),
+                        "categoryId": "27",
+                        "defaultLanguage": "id",
+                        "defaultAudioLanguage": "id",
+                    },
+                    "status": {
+                        "privacyStatus": "private",
+                        "publishAt": publish_at_iso,
+                        "selfDeclaredMadeForKids": False,
+                        "containsSyntheticMedia": True,
+                        "embeddable": True,
+                        "publicStatsViewable": True,
+                    },
+                    "localizations": locs,
+                }
+
+                youtube, drive = get_google_services()
+                print(f"[YOUTUBE GAMBAR SHORTS] Mengunggah Shorts: '{ai_data['title']}' (Jadwal: {publish_at_iso})...")
+                media_v = MediaFileUpload(short_mp4, mimetype="video/mp4", chunksize=10 * 1024 * 1024, resumable=True)
+                ins_req = youtube.videos().insert(part="snippet,status,localizations", body=video_body, media_body=media_v)
+                resp_yt = None
+                while resp_yt is None:
+                    _, resp_yt = ins_req.next_chunk(num_retries=5)
+                del ins_req
+                del media_v
+
+                vid_id = resp_yt["id"]
+                print(f"[YOUTUBE GAMBAR SHORTS] Berhasil diunggah! Link: https://youtube.com/shorts/{vid_id}")
+
+                try:
+                    add_video_to_matching_playlists(
+                        youtube=youtube,
+                        video_id=vid_id,
+                        original_filename=img_f["name"],
+                        ai_playlist_name=ai_data.get("playlist_name", "Kajian Keluarga Muslim"),
+                    )
+                except Exception:
+                    pass
+
+                history_data.setdefault("uploaded_files", {})[img_f["id"]] = {
+                    "original_name": img_f["name"],
+                    "md5Checksum": img_f.get("md5Checksum", ""),
+                    "youtube_video_id": vid_id,
+                    "youtube_title": ai_data["title"],
+                    "scheduled_publish_at": publish_at_iso,
+                    "processed_at": datetime.now(TZ_UTC).isoformat(),
+                    "upgraded_v3_cover_title_playlist": True,
+                    "upgraded_v4_full_promo_desc": True,
+                }
+                existing_yt_videos.append({"video_id": vid_id, "title": ai_data["title"], "description": full_description})
+                history_data["cached_youtube_videos"] = existing_yt_videos
+                history_data["last_scheduled_iso"] = publish_at_iso
+                history_file_id = save_upload_history(drive, root_id, history_data, history_file_id)
+
+                move_drive_file(drive, img_f["id"], image_queue_id, done_id)
+                processed_img_count += 1
+                time.sleep(10)
+
+        except (HttpError, BrokenPipeError, ConnectionError, TimeoutError) as net_err:
+            err_str = str(net_err)
+            if "quotaExceeded" in err_str or "uploadLimitExceeded" in err_str or isinstance(net_err, BrokenPipeError):
+                return processed_img_count, history_file_id, True
+            break
+        except Exception as e:
+            print(f"[PERINGATAN] Gagal memproses gambar Shorts '{img_f['name']}': {e}")
+            continue
+
+    return processed_img_count, history_file_id, False
+
+
+def upgrade_legacy_channel_videos_metadata(
+    youtube,
+    drive,
+    root_id: str,
+    history_data: Dict[str, Any],
+    history_file_id: Optional[str],
+    existing_yt_videos: List[Dict[str, str]],
+    gemini_api_key: str,
+    max_per_run: int = 8,
+) -> Optional[str]:
+    """
+    Memeriksa seluruh video di channel Islamic K1 yang:
+    - Belum memiliki deskripsi lengkap (kosong, pendek, atau hanya berisi deskripsi standar lama tanpa 3 paragraf/timeline), ATAU
+    - Belum memiliki blok promosi 'Islamic Studies - Buku Catatan Materi & Aktivitas Perkembangan Mengaji' (Jilid 1, 2, 3).
+    Secara otomatis melengkapi: Deskripsi 3 Paragraf Islami + Salam + Timeline + Link Buku Mengaji Jilid 1-3 & Donasi
+    + Tags + Terjemahan 10 Bahasa + Playlist (bertahap setiap siklus agar aman & hemat kuota API!).
+    """
+    upgraded_set = set(history_data.get("upgraded_full_desc_video_ids", []))
+    candidates: List[Dict[str, str]] = []
+
+    for v in existing_yt_videos:
+        vid_id = v.get("video_id", "")
+        if not vid_id or vid_id in upgraded_set:
+            continue
+        desc = v.get("description", "") or ""
+        has_book_links = "id.shp.ee/oQa2tEh" in desc and "id.shp.ee/Cpwj7ZA" in desc and "id.shp.ee/xgWDkq5" in desc
+        has_timeline = "00:00" in desc or "0:00" in desc
+        has_salam = "assalamu" in desc.lower() and len(desc.strip()) >= 420
+        if not (has_book_links and has_timeline and has_salam):
+            candidates.append(v)
+
+    if not candidates:
+        return history_file_id
+
+    batch = candidates[:max_per_run]
+    print(f"[UPGRADE DESKRIPSI & BUKU MENGAJI] Memperbarui {len(batch)} dari {len(candidates)} video channel yang belum punya deskripsi lengkap / link Buku Mengaji...")
+
+    for item in batch:
+        vid_id = item["video_id"]
+        try:
+            youtube, drive = get_google_services()
+            v_res = youtube.videos().list(part="snippet,contentDetails,localizations", id=vid_id).execute(num_retries=3)
+            v_items = v_res.get("items", [])
+            if not v_items:
+                upgraded_set.add(vid_id)
+                continue
+
+            v_obj = v_items[0]
+            snippet = v_obj["snippet"]
+            cur_title = snippet.get("title", "Kajian Islami Islamic K1")
+            cur_desc = snippet.get("description", "") or ""
+
+            # Estimasi durasi dari ISO 8601 duration (misal PT4M15S)
+            iso_dur = v_obj.get("contentDetails", {}).get("duration", "PT3M0S")
+            m_min = re.search(r"(\d+)M", iso_dur)
+            m_sec = re.search(r"(\d+)S", iso_dur)
+            est_dur = (int(m_min.group(1)) * 60 if m_min else 0) + (int(m_sec.group(1)) if m_sec else 0)
+            if est_dur <= 0:
+                est_dur = 180.0
+
+            is_short_vid = est_dur <= 62 or "#shorts" in cur_title.lower()
+            ai_meta = generate_complete_metadata_from_title_or_image(
+                title_or_filename=cur_title,
+                duration=float(est_dur),
+                gemini_api_key=gemini_api_key,
+                is_shorts=is_short_vid,
+            )
+
+            # Pertahankan kode [Ref:...] lama jika ada
+            ref_match = re.search(r"\[Ref:[^\]]+\]", cur_desc)
+            new_desc = ai_meta["full_description"]
+            if ref_match and ref_match.group(0) not in new_desc:
+                new_desc = f"{new_desc}\n\n{ref_match.group(0)}"
+
+            snippet["description"] = new_desc[:4900]
+            if not snippet.get("tags") or len(snippet.get("tags", [])) < 5:
+                snippet["tags"] = ai_meta.get("tags", ["IslamicK1", "BelajarMengaji", "KeluargaMuslim", "EdukasiIslami"])[:15]
+            snippet["defaultLanguage"] = "id"
+            snippet["defaultAudioLanguage"] = "id"
+
+            locs = v_obj.get("localizations") or {}
+            for lg, lval in (ai_meta.get("localizations") or {}).items():
+                locs[lg] = lval
+            locs["id"] = {"title": snippet["title"][:100], "description": snippet["description"][:4900]}
+
+            youtube.videos().update(
+                part="snippet,localizations",
+                body={"id": vid_id, "snippet": snippet, "localizations": locs},
+            ).execute(num_retries=3)
+
+            try:
+                add_video_to_matching_playlists(
+                    youtube=youtube,
+                    video_id=vid_id,
+                    original_filename=cur_title,
+                    ai_playlist_name=ai_meta.get("playlist_name", "Kajian Keluarga Muslim"),
+                )
+            except Exception:
+                pass
+
+            item["description"] = snippet["description"]
+            upgraded_set.add(vid_id)
+            history_data["upgraded_full_desc_video_ids"] = list(upgraded_set)
+            history_file_id = save_upload_history(drive, root_id, history_data, history_file_id)
+            print(f"  [OK UPGRADE CHANNEL] '{cur_title}' ({vid_id}) -> Deskripsi 3 Paragraf + Buku Mengaji Jilid 1-3 + Timeline + 10 Bahasa + Playlist!")
+        except HttpError as he:
+            if "quotaExceeded" in str(he):
+                print("[INFO KUOTA] Kuota harian YouTube tercapai saat upgrade deskripsi video lama, akan dilanjutkan otomatis besok.")
+                break
+            print(f"  [LEWATI] Gagal update {vid_id}: {he}")
+        except Exception as e:
+            print(f"  [LEWATI] Gagal update {vid_id}: {e}")
+
+    return history_file_id
+
+
 def run_queue_pipeline():
     """
     Memproses antrian video di Google Drive SATU PER SATU secara berurutan tanpa henti
@@ -1143,12 +1422,13 @@ def run_queue_pipeline():
 
     youtube, drive = get_google_services()
 
-    # 1. Pastikan struktur folder di Google Drive 2 TB siap
+    # 1. Pastikan struktur folder di Google Drive 2 TB siap (termasuk 05_Antrian_Gambar_Shorts)
     root_id = ensure_drive_folder(drive, DRIVE_ROOT_FOLDER)
     assets_id = ensure_drive_folder(drive, DRIVE_ASSETS_FOLDER, root_id)
     queue_id = ensure_drive_folder(drive, DRIVE_QUEUE_FOLDER, root_id)
     done_id = ensure_drive_folder(drive, DRIVE_DONE_FOLDER, root_id)
     form_queue_id = ensure_drive_folder(drive, DRIVE_FORM_QUEUE_FOLDER, root_id)
+    image_shorts_id = ensure_drive_folder(drive, DRIVE_IMAGE_SHORTS_FOLDER, root_id)
 
     # 2. Ambil riwayat upload & daftar video eksisting di channel Islamic K1
     history_data, history_file_id = load_upload_history(drive, root_id)
@@ -1165,6 +1445,21 @@ def run_queue_pipeline():
     history_data["cached_youtube_videos"] = existing_yt_videos
     history_file_id = save_upload_history(drive, root_id, history_data, history_file_id)
 
+    # 2B. PRIORITAS #0: Proses antrian Gambar Shorts di `05_Antrian_Gambar_Shorts`
+    img_processed, history_file_id, img_quota_hit = process_image_shorts_queue(
+        gemini_api_key=gemini_api_key,
+        root_id=root_id,
+        assets_id=assets_id,
+        image_queue_id=image_shorts_id,
+        done_id=done_id,
+        history_data=history_data,
+        history_file_id=history_file_id,
+        existing_yt_videos=existing_yt_videos,
+    )
+    if img_quota_hit:
+        print(f"[SELESAI SESI] Kuota harian YouTube tercapai. Total Gambar Shorts diproses: {img_processed}")
+        return
+
     # 3. PRIORITAS UTAMA #1: Proses antrian Google Form Motion Grafis Explainer 3 Menit (Islami & Umum)
     form_processed, history_file_id, quota_hit = process_google_form_explainer_queue(
         gemini_api_key=gemini_api_key,
@@ -1180,7 +1475,7 @@ def run_queue_pipeline():
         print(f"[SELESAI SESI] Kuota harian YouTube tercapai. Total video Google Form diproses: {form_processed}")
         return
 
-    processed_count = form_processed
+    processed_count = img_processed + form_processed
 
     # 4. PRIORITAS UTAMA #2: Proses antrian video baru di 01_Antrian_NotebookLM satu per satu
     while True:
@@ -1235,8 +1530,10 @@ def run_queue_pipeline():
 
                 orig_duration = get_video_duration(raw_video_path)
                 trimmed_duration = max(1.0, orig_duration - 4.0)
+                is_vert_nlm = is_portrait_video(raw_video_path)
+                mode_label = "YOUTUBE SHORTS POTRET (9:16)" if is_vert_nlm else "VIDEO LANDSCAPE (16:9)"
                 print(
-                    f"[INFO] Durasi asli: {orig_duration:.2f}s -> Dipotong 4 detik terakhir menjadi: {trimmed_duration:.2f}s"
+                    f"[INFO] Mode: {mode_label} | Durasi asli: {orig_duration:.2f}s -> Dipotong 4 detik terakhir menjadi: {trimmed_duration:.2f}s"
                 )
 
                 print("[AI] Menghasilkan transkripsi, metadata Islami, timeline, & terjemahan 10 bahasa...")
@@ -1249,7 +1546,7 @@ def run_queue_pipeline():
 
                 final_video_path = os.path.join(work_dir, "final_islamick1.mp4")
                 print(
-                    "[FFMPEG] Merender video (potong 4s + TANPA subtitle + logo kanan atas + outro SUBSCRIBE)..."
+                    f"[FFMPEG] Merender {mode_label} (potong 4s + TANPA subtitle + logo kanan atas + outro SUBSCRIBE)..."
                 )
                 final_duration = render_final_video(
                     input_video_path=raw_video_path,
@@ -1257,11 +1554,14 @@ def run_queue_pipeline():
                     logo_path=logo_path,
                     output_video_path=final_video_path,
                     cut_last_seconds=4.0,
+                    force_portrait=is_vert_nlm,
                 )
                 print(f"[FFMPEG] Selesai! Durasi total dengan outro: {final_duration:.2f}s")
 
                 # Seragamkan Judul YouTube ("... I PAIBP 6 I Bab 9", "... I Fikih 5 I Bab 1", dst.)
                 uniform_title = format_uniform_youtube_title(ai_data["title"], target_file["name"])
+                if is_vert_nlm and "#shorts" not in uniform_title.lower():
+                    uniform_title = f"{uniform_title[:88]} #Shorts"
                 ai_data["title"] = uniform_title
 
                 publish_at_iso = compute_next_prime_time_utc(
@@ -1270,6 +1570,8 @@ def run_queue_pipeline():
                 )
                 md5_ref = (target_file.get("md5Checksum") or target_file["id"])[:10]
                 full_description = f"{ai_data['full_description']}\n\n[Ref:{md5_ref}]"
+                if is_vert_nlm and "#shorts" not in full_description.lower():
+                    full_description = f"{full_description}\n#Shorts #IslamicK1"
 
                 localizations_map = ai_data.get("localizations", {})
                 localizations_map["id"] = {
@@ -1277,11 +1579,15 @@ def run_queue_pipeline():
                     "description": full_description[:4900],
                 }
 
+                tags_list = ai_data.get("tags", ["IslamicK1", "Keluarga Muslim", "Kajian Islam"])[:13]
+                if is_vert_nlm and "Shorts" not in tags_list:
+                    tags_list.extend(["Shorts", "YouTubeShorts"])
+
                 video_body = {
                     "snippet": {
                         "title": uniform_title[:100],
                         "description": full_description[:4900],
-                        "tags": ai_data.get("tags", ["IslamicK1", "Keluarga Muslim", "Kajian Islam"])[:15],
+                        "tags": tags_list[:15],
                         "categoryId": "27",
                         "defaultLanguage": "id",
                         "defaultAudioLanguage": "id",
@@ -1447,6 +1753,22 @@ def run_queue_pipeline():
             except Exception as e:
                 print(f"[PERINGATAN] Gagal memperbarui judul/playlist untuk {fid}: {e}")
                 break
+
+    # 6. Perbarui bertahap seluruh video di channel Islamic K1 yang belum memiliki deskripsi lengkap / link Buku Mengaji Jilid 1-3
+    try:
+        youtube, drive = get_google_services()
+        history_file_id = upgrade_legacy_channel_videos_metadata(
+            youtube=youtube,
+            drive=drive,
+            root_id=root_id,
+            history_data=history_data,
+            history_file_id=history_file_id,
+            existing_yt_videos=existing_yt_videos,
+            gemini_api_key=gemini_api_key,
+            max_per_run=8,
+        )
+    except Exception as up_desc_err:
+        print(f"[INFO UPGRADE DESKRIPSI] Dilewati sementara ({up_desc_err}).")
 
 
 if __name__ == "__main__":

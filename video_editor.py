@@ -17,7 +17,7 @@ import os
 import re
 import subprocess
 import textwrap
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter, ImageStat
 
 _LOCAL_FFMPEG_BIN = r"E:\ISLAMIC K1\Video Extender\ffmpeg\bin"
@@ -158,6 +158,43 @@ def create_srt_subtitle(
         f.writelines(lines)
 
 
+def get_video_dimensions(video_path: str) -> Tuple[int, int]:
+    """Mengembalikan (width, height) efektif video dengan memperhitungkan rotasi metadata HP/Shorts."""
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height:stream_side_data=rotation:stream_tags=rotate",
+            "-of", "json",
+            video_path,
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        import json as _json
+        info = _json.loads(res.stdout or "{}")
+        streams = info.get("streams", [{}])
+        st = streams[0] if streams else {}
+        w = int(st.get("width") or 1920)
+        h = int(st.get("height") or 1080)
+        rot = 0
+        tags = st.get("tags") or {}
+        if "rotate" in tags:
+            rot = abs(int(float(tags["rotate"])))
+        for sd in st.get("side_data_list") or []:
+            if "rotation" in sd:
+                rot = abs(int(float(sd["rotation"])))
+        if rot in (90, 270):
+            w, h = h, w
+        return w, h
+    except Exception:
+        return 1920, 1080
+
+
+def is_portrait_video(video_path: str) -> bool:
+    """True jika tinggi video lebih besar dari lebarnya (format Vertikal 9:16 / Shorts)."""
+    w, h = get_video_dimensions(video_path)
+    return h > w
+
+
 def render_final_video(
     input_video_path: str,
     outro_video_path: str,
@@ -166,29 +203,48 @@ def render_final_video(
     fonts_dir: str = "",
     output_video_path: str = "",
     cut_last_seconds: float = 4.0,
+    force_portrait: Optional[bool] = None,
 ) -> float:
     """
     Memproses video secara lengkap dengan FFmpeg (TANPA SUBTITLE sesuai permintaan):
-    1. Memotong 4 detik terakhir dari durasi nyata video utama (menghilangkan logo NotebookLM).
-    2. Menambahkan logo Islamic K1 ukuran kecil di pojok kanan atas sepanjang video.
-    3. Menyambungkan video SUBSCRIBE ISLAMIC K1 di akhir video.
+    1. Otomatis mendeteksi apakah video Landscape (1920x1080) atau Portrait Shorts (1080x1920).
+    2. Memotong 4 detik terakhir dari durasi nyata video utama (menghilangkan logo NotebookLM).
+    3. Menambahkan logo Islamic K1 ukuran kecil di pojok kanan atas sepanjang video.
+    4. Menyambungkan video SUBSCRIBE ISLAMIC K1 di akhir video (atau menyesuaikan ke 9:16 untuk Shorts).
     """
     original_duration = get_video_duration(input_video_path)
     trimmed_duration = max(1.0, original_duration - cut_last_seconds)
+    is_vert = is_portrait_video(input_video_path) if force_portrait is None else force_portrait
 
-    filter_complex = (
-        f"[0:v]trim=0:{trimmed_duration:.3f},setpts=PTS-STARTPTS,"
-        f"scale=1920:1080:force_original_aspect_ratio=decrease,"
-        f"pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[main_v];"
-        f"[0:a]atrim=0:{trimmed_duration:.3f},asetpts=PTS-STARTPTS,"
-        f"aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[main_a];"
-        f"[1:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
-        f"pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[outro_v];"
-        f"[1:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[outro_a];"
-        f"[main_v][main_a][outro_v][outro_a]concat=n=2:v=1:a=1[joined_v][joined_a];"
-        f"[2:v]scale=110:-1[logo_small];"
-        f"[joined_v][logo_small]overlay=W-w-30:25:format=auto,format=yuv420p[final_v]"
-    )
+    if is_vert:
+        # Mode Vertikal 9:16 (1080x1920) untuk Video Potret NotebookLM -> YouTube Shorts
+        filter_complex = (
+            f"[0:v]trim=0:{trimmed_duration:.3f},setpts=PTS-STARTPTS,"
+            f"scale=1080:1920:force_original_aspect_ratio=decrease,"
+            f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[main_v];"
+            f"[0:a]atrim=0:{trimmed_duration:.3f},asetpts=PTS-STARTPTS,"
+            f"aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[main_a];"
+            f"[1:v]scale=1080:1920:force_original_aspect_ratio=decrease,"
+            f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=#051c14,setsar=1,fps=30,format=yuv420p[outro_v];"
+            f"[1:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[outro_a];"
+            f"[main_v][main_a][outro_v][outro_a]concat=n=2:v=1:a=1[joined_v][joined_a];"
+            f"[2:v]scale=120:-1[logo_small];"
+            f"[joined_v][logo_small]overlay=W-w-32:36:format=auto,format=yuv420p[final_v]"
+        )
+    else:
+        filter_complex = (
+            f"[0:v]trim=0:{trimmed_duration:.3f},setpts=PTS-STARTPTS,"
+            f"scale=1920:1080:force_original_aspect_ratio=decrease,"
+            f"pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[main_v];"
+            f"[0:a]atrim=0:{trimmed_duration:.3f},asetpts=PTS-STARTPTS,"
+            f"aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[main_a];"
+            f"[1:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
+            f"pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[outro_v];"
+            f"[1:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[outro_a];"
+            f"[main_v][main_a][outro_v][outro_a]concat=n=2:v=1:a=1[joined_v][joined_a];"
+            f"[2:v]scale=110:-1[logo_small];"
+            f"[joined_v][logo_small]overlay=W-w-30:25:format=auto,format=yuv420p[final_v]"
+        )
 
     cmd = [
         "ffmpeg",
@@ -500,3 +556,190 @@ def generate_youtube_thumbnail(
     final_rgb = canvas.convert("RGB")
     final_rgb.save(output_thumb_path, "JPEG", quality=92, optimize=True)
     return output_thumb_path
+
+
+def _generate_arabic_hijaz_instrumental_wav(duration_sec: float, out_wav_path: str) -> str:
+    """
+    Menghasilkan instrumen bebas copyright TANPA VOKAL bernuansa Arab/Timur Tengah/Islami (Maqam Hijaz)
+    secara prosedural 100% GRATIS & 100% Aman dari klaim Hak Cipta YouTube:
+    - Melodi petikan hangat ala Oud/Qanun pada tangga nada Hijaz (D4, Eb4, F#4, G4, A4, Bb4, C5, D5)
+    - Harmoni Drone lembut (D3 + A3)
+    - Ketukan perkusi Daf/Frame-Drum lembut nan syahdu.
+    """
+    import math
+    import wave
+    import struct
+
+    sr = 44100
+    total_samples = int(max(10.0, duration_sec) * sr)
+    # Tangga nada Maqam Hijaz (khas Timur Tengah / Islami yang menenangkan)
+    hijaz_freqs = [293.66, 311.13, 369.99, 392.00, 440.00, 466.16, 523.25, 587.33]
+    melody_pattern = [0, 1, 2, 3, 4, 3, 2, 1, 0, 3, 4, 5, 4, 3, 2, 0]
+    note_dur = 0.75  # 80 BPM syahdu
+
+    with wave.open(out_wav_path, "w") as wf:
+        wf.setnchannels(2)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        chunk_frames = bytearray()
+        for i in range(total_samples):
+            t = i / float(sr)
+            # Fade in 1.2s & fade out 1.8s
+            master_env = 1.0
+            if t < 1.2:
+                master_env = t / 1.2
+            elif t > duration_sec - 1.8:
+                master_env = max(0.0, (duration_sec - t) / 1.8)
+
+            # 1. Warm Arabic Drone Pad (D3 = 146.83 Hz & A3 = 220.0 Hz)
+            pad = (
+                math.sin(2.0 * math.pi * 146.83 * t) * 0.14
+                + math.sin(2.0 * math.pi * 220.00 * t) * 0.10
+                + math.sin(2.0 * math.pi * 73.42 * t) * 0.08
+            )
+
+            # 2. Melodi Petikan Oud / Qanun (Maqam Hijaz) dengan efek gema (echo)
+            step_idx = int(t / note_dur)
+            local_t = t - (step_idx * note_dur)
+            freq = hijaz_freqs[melody_pattern[step_idx % len(melody_pattern)]]
+            pluck_env = math.exp(-local_t * 4.2) * (1.0 - math.exp(-local_t * 95.0))
+            oud_note = (
+                math.sin(2.0 * math.pi * freq * t) * 0.65
+                + math.sin(2.0 * math.pi * (freq * 2.0) * t) * 0.25
+                + math.sin(2.0 * math.pi * (freq * 3.0) * t) * 0.10
+            ) * pluck_env * 0.34
+
+            # Echo dari not sebelumnya (efek ruangan/hall)
+            prev_freq = hijaz_freqs[melody_pattern[(step_idx - 1) % len(melody_pattern)]]
+            echo_env = math.exp(-(local_t + note_dur) * 3.2)
+            oud_echo = math.sin(2.0 * math.pi * prev_freq * t) * echo_env * 0.14
+
+            # 3. Ketukan Daf / Doumbek Halus (tiap 1.5 detik = Dum, tiap 0.75 detik = Tek lembut)
+            beat_pos = t % (note_dur * 2.0)
+            daf = 0.0
+            if beat_pos < 0.14:
+                d_env = (1.0 - beat_pos / 0.14) ** 2.4
+                d_freq = 115.0 - 55.0 * (beat_pos / 0.14)
+                daf = math.sin(2.0 * math.pi * d_freq * beat_pos) * d_env * 0.22
+
+            val_l = max(-0.92, min(0.92, (pad + oud_note + daf) * master_env))
+            val_r = max(-0.92, min(0.92, (pad + oud_note * 0.85 + oud_echo + daf) * master_env))
+            chunk_frames.extend(struct.pack("<hh", int(val_l * 32767), int(val_r * 32767)))
+            if len(chunk_frames) >= 65536:
+                wf.writeframes(bytes(chunk_frames))
+                chunk_frames.clear()
+        if chunk_frames:
+            wf.writeframes(bytes(chunk_frames))
+    return out_wav_path
+
+
+def render_image_to_shorts_video(
+    image_path: str,
+    logo_path: str,
+    font_path: str,
+    output_video_path: str,
+    duration_sec: float = 20.0,
+) -> float:
+    """
+    Mengubah gambar (baik Potret maupun Landscape) dari folder `05_Antrian_Gambar_Shorts`
+    menjadi Video YouTube Shorts 9:16 (1080x1920) lengkap dengan:
+    1. Penyesuaian otomatis rasio Potret 1080x1920 (jika gambar asli Landscape, otomatis diberi latar belakang
+       blur artistik + bingkai emas Islami agar utuh & tidak terpotong).
+    2. Gerakan kamera halus (Ken Burns Zoom/Pan) + Banner informasi Buku Catatan Mengaji di bagian bawah.
+    3. Instrumen bebas copyright tanpa vokal bernuansa Arab/Islami (Maqam Hijaz).
+    4. Logo Islamic K1 di pojok kanan atas.
+    """
+    W, H = 1080, 1920
+    src_im = Image.open(image_path).convert("RGB")
+    sw, sh = src_im.size
+    src_ratio = sw / float(max(1, sh))
+
+    # Buat 3 keyframe animasi zoom halus agar ringan & cepat di Cloud maupun Lokal
+    work_dir = os.path.dirname(os.path.abspath(output_video_path))
+    stage_pngs: List[str] = []
+    for st_i in range(3):
+        zoom_f = 1.0 + st_i * 0.035
+        canvas = Image.new("RGBA", (W, H), (6, 32, 24, 255))
+
+        # Latar belakang gradasi + blur dari gambar asli
+        bg_im = src_im.resize((W, H), Image.Resampling.BILINEAR).filter(ImageFilter.GaussianBlur(radius=28))
+        bg_im = ImageEnhance.Brightness(bg_im).enhance(0.32)
+        canvas.paste(bg_im.convert("RGBA"), (0, 0))
+
+        ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        odraw = ImageDraw.Draw(ov)
+        odraw.rounded_rectangle([24, 24, W - 24, H - 24], radius=28, outline=(255, 208, 0, 130), width=3)
+
+        if src_ratio < 0.72:
+            # Gambar sudah Potret: tampilkan besar memenuhi area utama (960x1540) dengan zoom halus
+            box_w, box_h = 968, 1520
+            box_x, box_y = (W - box_w) // 2, 140
+        else:
+            # Gambar Landscape atau Kotak: sesuaikan proporsional di tengah layar dengan bingkai emas elegan
+            box_w = 980
+            box_h = min(1320, max(620, int(box_w / src_ratio)))
+            box_x = (W - box_w) // 2
+            box_y = (H - box_h) // 2 - 40
+
+        zw, zh = int(box_w * zoom_f), int(box_h * zoom_f)
+        im_z = src_im.resize((zw, zh), Image.Resampling.LANCZOS)
+        lc, tc = (zw - box_w) // 2, (zh - box_h) // 2
+        im_crop = im_z.crop((lc, tc, lc + box_w, tc + box_h)).convert("RGBA")
+
+        odraw.rounded_rectangle(
+            [box_x - 6, box_y - 6, box_x + box_w + 6, box_y + box_h + 6],
+            radius=24, fill=(8, 40, 30, 245), outline=(255, 208, 0, 255), width=5,
+        )
+        canvas.paste(im_crop, (box_x, box_y))
+
+        # Banner Produk Buku Catatan Mengaji di Bagian Bawah (Zona Aman Shorts)
+        b_font = _load_bold_font(23, font_path)
+        s_font = _load_bold_font(20, font_path)
+        odraw.rounded_rectangle(
+            [48, 1690, W - 48, 1810],
+            radius=20, fill=(6, 28, 21, 238), outline=(255, 208, 0, 235), width=3,
+        )
+        odraw.text((76, 1708), "📖 BUKU CATATAN MATERI & AKTIVITAS MENGAJI (JILID 1-3)", font=b_font, fill=(255, 215, 35, 255))
+        odraw.text((76, 1748), "👉 Cek Link Pembelian Resmi & Donasi di Deskripsi Video!", font=s_font, fill=(255, 255, 255, 245))
+
+        png_p = os.path.join(work_dir, f"img_short_st_{st_i}.png")
+        Image.alpha_composite(canvas, ov).convert("RGB").save(png_p, "PNG")
+        stage_pngs.append(png_p)
+
+    wav_path = os.path.join(work_dir, "hijaz_instrumental.wav")
+    _generate_arabic_hijaz_instrumental_wav(duration_sec, wav_path)
+
+    concat_txt = os.path.join(work_dir, "img_short_frames.txt")
+    st_dur = duration_sec / 3.0
+    with open(concat_txt, "w", encoding="utf-8") as cf:
+        for p in stage_pngs:
+            cf.write(f"file '{p.replace(chr(92), '/')}'\n")
+            cf.write(f"duration {st_dur:.3f}\n")
+        cf.write(f"file '{stage_pngs[-1].replace(chr(92), '/')}'\n")
+
+    raw_mp4 = os.path.join(work_dir, "img_short_raw.mp4")
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_txt, "-i", wav_path,
+            "-vf", "fps=30,scale=1080:1920,setsar=1,format=yuv420p,fade=t=in:st=0:d=0.4,fade=t=out:st=19.2:d=0.6",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+            "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", "-shortest", raw_mp4,
+        ],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+    )
+
+    if logo_path and os.path.exists(logo_path):
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", raw_mp4, "-i", logo_path,
+                "-filter_complex", "[1:v]scale=125:-1[lg];[0:v][lg]overlay=W-w-36:40:format=auto,format=yuv420p[vout]",
+                "-map", "[vout]", "-map", "0:a",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-c:a", "copy", output_video_path,
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+        )
+    else:
+        import shutil as _sh
+        _sh.copy2(raw_mp4, output_video_path)
+
+    return get_video_duration(output_video_path)
