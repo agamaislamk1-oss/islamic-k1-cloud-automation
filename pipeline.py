@@ -193,16 +193,32 @@ def get_google_services():
 
 
 def ensure_drive_folder(drive, folder_name: str, parent_id: Optional[str] = None) -> str:
-    """Mencari atau membuat folder di Google Drive secara otomatis."""
+    """
+    Mencari atau membuat folder di Google Drive secara otomatis.
+    Jika ditemukan lebih dari 1 folder dengan nama yang sama (duplikat), otomatis memindahkan
+    seluruh isinya ke folder pertama lalu menghapus folder duplikat agar tidak membingungkan!
+    """
     escaped = folder_name.replace("'", "\\'")
     query = f"name = '{escaped}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
     if parent_id:
         query += f" and '{parent_id}' in parents"
 
-    res = drive.files().list(q=query, fields="files(id, name)", pageSize=5).execute()
+    res = drive.files().list(q=query, fields="files(id, name, createdTime)", orderBy="createdTime asc", pageSize=10).execute()
     files = res.get("files", [])
     if files:
-        return files[0]["id"]
+        primary_id = files[0]["id"]
+        if len(files) > 1:
+            for dup_folder in files[1:]:
+                dup_id = dup_folder["id"]
+                try:
+                    children = drive.files().list(q=f"'{dup_id}' in parents and trashed = false", fields="files(id, name)").execute().get("files", [])
+                    for ch in children:
+                        drive.files().update(fileId=ch["id"], addParents=primary_id, removeParents=dup_id, fields="id").execute()
+                    drive.files().update(fileId=dup_id, body={"trashed": True}).execute()
+                    print(f"[BERSIH DUPLIKAT FOLDER] Folder kembar '{folder_name}' ({dup_id}) digabungkan & dihapus!")
+                except Exception:
+                    pass
+        return primary_id
 
     meta: Dict[str, Any] = {
         "name": folder_name,
