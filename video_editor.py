@@ -195,6 +195,75 @@ def is_portrait_video(video_path: str) -> bool:
     return h > w
 
 
+def detect_smart_end_trim_timestamp(
+    video_path: str,
+    orig_duration: float,
+    transcript_segments: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[float, float]:
+    """
+    Mendeteksi titik potong akhir video NotebookLM secara cerdas & presisi TEPAT SETELAH
+    ucapan salam penutup selesai diucapkan lengkap (tidak dipatok kaku 4 detik):
+    1. Memindai bagian akhir audio (14 detik terakhir) dengan FFmpeg `silencedetect` untuk menemukan
+       detik tepat saat suara narator selesai berbicara sebelum layar hening watermark NotebookLM muncul.
+    2. Memeriksa timestamp akhir segmen transkrip Whisper (`transcript_segments[-1]['end']`) agar
+       kalimat salam penutup ('Wassalamu'alaikum warahmatullahi wabarakatuh') TIDAK PERNAH terpotong!
+    3. Memberikan jeda napas alami +0.35 detik setelah kata terakhir selesai diucapkan.
+    Mengembalikan tuple: (trimmed_duration, cut_last_seconds).
+    """
+    if orig_duration <= 6.0:
+        return orig_duration, 0.0
+
+    # 1. Deteksi batas akhir suara bicara menggunakan FFmpeg silencedetect pada 14 detik terakhir
+    tail_window = min(14.0, orig_duration * 0.5)
+    start_offset = max(0.0, orig_duration - tail_window)
+    silence_speech_end = 0.0
+    try:
+        cmd = [
+            "ffmpeg",
+            "-ss", f"{start_offset:.3f}",
+            "-i", video_path,
+            "-vn",
+            "-af", "silencedetect=n=-35dB:d=0.22",
+            "-f", "null",
+            "-",
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        starts = [float(x) for x in re.findall(r"silence_start:\s*([\d.]+)", res.stderr or "")]
+        ends = [float(x) for x in re.findall(r"silence_end:\s*([\d.]+)", res.stderr or "")]
+        if starts:
+            last_s_start = start_offset + starts[-1]
+            last_s_end = (start_offset + ends[-1]) if len(ends) >= len(starts) else orig_duration
+            # Jika hening terakhir berlangsung sampai ujung video (atau < 0.35s dari ujung video)
+            if orig_duration - last_s_end <= 0.45 and (orig_duration - last_s_start) <= 7.0:
+                silence_speech_end = last_s_start
+    except Exception:
+        pass
+
+    # 2. Cek batas akhir segmen ucapan dari transkrip Whisper (jika ada)
+    whisper_speech_end = 0.0
+    if transcript_segments:
+        try:
+            valid_ends = [float(seg.get("end", 0.0)) for seg in transcript_segments if float(seg.get("end", 0.0)) <= orig_duration]
+            if valid_ends:
+                whisper_speech_end = max(valid_ends)
+        except Exception:
+            pass
+
+    # Gunakan titik waktu paling akhir di antara deteksi gelombang suara & transkrip agar salam 100% utuh!
+    detected_speech_end = max(silence_speech_end, whisper_speech_end)
+
+    if detected_speech_end > (orig_duration - 7.5) and detected_speech_end < orig_duration:
+        # Tambahkan jeda napas 0.35 detik setelah huruf terakhir salam selesai diucapkan
+        # Namun tetap potong minimal 0.8 detik terakhir jika ada kartu watermark bisu di ujung
+        trimmed_duration = min(orig_duration - 0.6, detected_speech_end + 0.35)
+    else:
+        # Fallback aman: hanya potong 1.8 detik ujung hening watermark (bukan 4 detik agar salam aman)
+        trimmed_duration = max(1.0, orig_duration - 1.8)
+
+    cut_last_seconds = max(0.0, orig_duration - trimmed_duration)
+    return trimmed_duration, cut_last_seconds
+
+
 def render_final_video(
     input_video_path: str,
     outro_video_path: str,

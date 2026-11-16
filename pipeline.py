@@ -64,6 +64,7 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from video_editor import (
     get_video_duration,
     is_portrait_video,
+    detect_smart_end_trim_timestamp,
     create_ass_subtitle,
     create_srt_subtitle,
     render_final_video,
@@ -1529,31 +1530,37 @@ def run_queue_pipeline():
                 download_drive_file(drive, target_file["id"], raw_video_path)
 
                 orig_duration = get_video_duration(raw_video_path)
-                trimmed_duration = max(1.0, orig_duration - 4.0)
                 is_vert_nlm = is_portrait_video(raw_video_path)
                 mode_label = "YOUTUBE SHORTS POTRET (9:16)" if is_vert_nlm else "VIDEO LANDSCAPE (16:9)"
-                print(
-                    f"[INFO] Mode: {mode_label} | Durasi asli: {orig_duration:.2f}s -> Dipotong 4 detik terakhir menjadi: {trimmed_duration:.2f}s"
-                )
 
-                print("[AI] Menghasilkan transkripsi, metadata Islami, timeline, & terjemahan 10 bahasa...")
+                print("[AI] Mentranskripsi penuh hingga salam penutup & menyusun metadata 10 bahasa...")
                 ai_data = analyze_video_with_gemini(
                     video_path=raw_video_path,
-                    trimmed_duration=trimmed_duration,
+                    trimmed_duration=orig_duration,
                     original_filename=target_file["name"],
                     gemini_api_key=gemini_api_key,
                 )
 
+                trimmed_duration, smart_cut_seconds = detect_smart_end_trim_timestamp(
+                    video_path=raw_video_path,
+                    orig_duration=orig_duration,
+                    transcript_segments=ai_data.get("transcript_segments"),
+                )
+                print(
+                    f"[SMART TRIM SALAM] Mode: {mode_label} | Durasi asli: {orig_duration:.2f}s -> "
+                    f"Salam selesai di {trimmed_duration:.2f}s (Memotong ekor watermark {smart_cut_seconds:.2f}s)"
+                )
+
                 final_video_path = os.path.join(work_dir, "final_islamick1.mp4")
                 print(
-                    f"[FFMPEG] Merender {mode_label} (potong 4s + TANPA subtitle + logo kanan atas + outro SUBSCRIBE)..."
+                    f"[FFMPEG] Merender {mode_label} (potong tepat setelah salam {smart_cut_seconds:.2f}s + logo kanan atas + outro SUBSCRIBE)..."
                 )
                 final_duration = render_final_video(
                     input_video_path=raw_video_path,
                     outro_video_path=outro_path,
                     logo_path=logo_path,
                     output_video_path=final_video_path,
-                    cut_last_seconds=4.0,
+                    cut_last_seconds=smart_cut_seconds,
                     force_portrait=is_vert_nlm,
                 )
                 print(f"[FFMPEG] Selesai! Durasi total dengan outro: {final_duration:.2f}s")
