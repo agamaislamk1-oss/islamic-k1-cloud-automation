@@ -1764,13 +1764,18 @@ def process_image_and_audio_queue(
             move_drive_file(drive, aud_f["id"], img_audio_queue_id, done_id)
             continue
 
-        # Cari gambar pasangan: prioritas 1 nama dasar mirip/sama, prioritas 2 gambar pertama yang belum terpakai
-        aud_norm = normalize_key(aud_f["name"])
+        # Cari gambar pasangan: abaikan akhiran (1), (2), copy agar Bagian_3 (1).m4a selalu berpasangan tepat dengan Bagian_3 (2).png!
+        def _clean_pair_stem(fname: str) -> str:
+            stem = os.path.splitext(fname)[0].lower()
+            stem = re.sub(r"\(\d+\)\s*$", "", stem).strip()
+            return re.sub(r"[^a-z0-9]+", "", stem)
+
+        aud_norm = _clean_pair_stem(aud_f["name"])
         matched_img = None
         for im_f in image_files:
             if im_f["id"] in used_img_ids:
                 continue
-            im_norm = normalize_key(im_f["name"])
+            im_norm = _clean_pair_stem(im_f["name"])
             if aud_norm and im_norm and (aud_norm == im_norm or aud_norm in im_norm or im_norm in aud_norm):
                 matched_img = im_f
                 break
