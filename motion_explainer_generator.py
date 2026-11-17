@@ -1285,6 +1285,194 @@ def _create_rich_styled_fallback_image(
     canvas.convert("RGB").save(out_jpg, "JPEG", quality=90)
 
 
+_USER_EBOOK_DRIVE_FOLDER_ID = "11ovqUixuFNcSjGHP_KIwpRRzYp1qls0s"
+_CACHED_DRIVE_PDF_CATALOG: List[Dict[str, Any]] = []
+_EXTRACTED_PDF_PAGES_CACHE: Dict[str, List[str]] = {}
+
+
+def _load_drive_pdf_catalog() -> Tuple[Any, List[Dict[str, Any]]]:
+    """Memuat daftar seluruh file PDF buku bergambar Islami dari folder Google Drive `11ovqUixuFNcSjGHP_KIwpRRzYp1qls0s` beserta subfolder-nya."""
+    global _CACHED_DRIVE_PDF_CATALOG
+    import json as _json
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
+    from googleapiclient.discovery import build
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    raw_tok = os.environ.get("GOOGLE_DRIVE_TOKEN_JSON")
+    if raw_tok:
+        creds = Credentials.from_authorized_user_info(_json.loads(raw_tok.lstrip("\ufeff")))
+    else:
+        creds = Credentials.from_authorized_user_file(os.path.join(script_dir, "token_drive.json"))
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+    drive = build("drive", "v3", credentials=creds)
+
+    if _CACHED_DRIVE_PDF_CATALOG:
+        return drive, _CACHED_DRIVE_PDF_CATALOG
+
+    catalog: List[Dict[str, Any]] = []
+    items = (
+        drive.files()
+        .list(
+            q=f"'{_USER_EBOOK_DRIVE_FOLDER_ID}' in parents and trashed = false",
+            fields="files(id, name, mimeType, size)",
+            pageSize=100,
+        )
+        .execute(num_retries=3)
+        .get("files", [])
+    )
+    subfolders = []
+    for it in items:
+        if it.get("mimeType") == "application/pdf":
+            catalog.append(it)
+        elif it.get("mimeType") == "application/vnd.google-apps.folder":
+            subfolders.append(it)
+
+    for sf in subfolders:
+        try:
+            sub_items = (
+                drive.files()
+                .list(
+                    q=f"'{sf['id']}' in parents and mimeType = 'application/pdf' and trashed = false",
+                    fields="files(id, name, mimeType, size)",
+                    pageSize=50,
+                )
+                .execute(num_retries=2)
+                .get("files", [])
+            )
+            for sit in sub_items:
+                sit["folder_name"] = sf["name"]
+                catalog.append(sit)
+        except Exception:
+            pass
+
+    _CACHED_DRIVE_PDF_CATALOG = catalog
+    return drive, catalog
+
+
+def _get_topic_pdf_illustration_from_drive(
+    topic_title: str,
+    scene: Dict[str, Any],
+    scene_num: int,
+    work_dir: str,
+    out_jpg: str,
+) -> bool:
+    """
+    Mencari PDF buku bergambar Islami di folder Google Drive `11ovqUixuFNcSjGHP_KIwpRRzYp1qls0s`
+    yang paling cocok dengan topik yang sedang dibahas, lalu mengekstrak halaman/gambar ilustrasi berwarna
+    menggunakan PyMuPDF (`pymupdf` / `fitz`) untuk ditampilkan di video maupun Shorts!
+    """
+    import io
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        import fitz
+
+    try:
+        drive, catalog = _load_drive_pdf_catalog()
+        if not catalog:
+            return False
+
+        text_blob = f"{topic_title} {scene.get('headline', '')} {scene.get('chapter_title', '')}".lower()
+        topic_words = [w for w in re.sub(r"[^a-z0-9\s]", " ", text_blob).split() if len(w) >= 3]
+
+        # Peta kecocokan topik ke kata kunci judul buku PDF di folder Ebook Anak
+        synonym_boosts = []
+        if any(k in text_blob for k in ("shalat", "sholat", "ruku", "sujud", "takbir", "jamaah")):
+            synonym_boosts.extend(["shalat", "ibadahku", "fiqih", "fikih"])
+        if any(k in text_blob for k in ("wudhu", "bersuci", "thaharah", "tayamum")):
+            synonym_boosts.extend(["berwudhu", "bersuci", "fiqih"])
+        if any(k in text_blob for k in ("puasa", "ramadhan", "sahur", "buka")):
+            synonym_boosts.extend(["puasa", "ramadhan", "fikih"])
+        if any(k in text_blob for k in ("zakat", "sedekah", "infak", "berbagi", "ma'un", "maun", "yatim")):
+            synonym_boosts.extend(["berzakat", "hadits", "adab"])
+        if any(k in text_blob for k in ("haji", "umrah", "qurban", "kurban", "kautsar", "mekkah", "ka'bah", "al-fil", "quraisy")):
+            synonym_boosts.extend(["berhaji", "rasul", "mukjizat", "kisah"])
+        if any(k in text_blob for k in ("doa", "dzikir", "adab", "akhlak", "jujur", "sabar", "syukur", "al-fatihah", "an-nas", "al-falaq")):
+            synonym_boosts.extend(["doa", "adab", "hadits", "asmaul husna"])
+        if any(k in text_blob for k in ("nabi", "rasul", "muhammad", "sahabat", "umar", "kisah", "sejarah", "mukjizat")):
+            synonym_boosts.extend(["kisah", "rasulullah", "nabi", "mukjizat", "adab"])
+        if any(k in text_blob for k in ("allah", "asmaul", "iman", "tauhid", "al-ikhlas", "al-kafirun")):
+            synonym_boosts.extend(["asmaul husna", "allah", "ibadahku"])
+        if any(k in text_blob for k in ("pesawat", "terbang", "transportasi", "kendaraan")):
+            synonym_boosts.extend(["transportasi", "burung", "alam"])
+        if any(k in text_blob for k in ("pelangi", "langit", "bumi", "alam", "hewan", "burung", "laut", "tumbuhan")):
+            synonym_boosts.extend(["alam", "bumiku", "hewan", "burung", "lautku", "tumbuhan"])
+
+        scored_pdfs = []
+        for item in catalog:
+            sz = int(item.get("size") or 0)
+            if sz > 28 * 1024 * 1024:
+                continue  # Utamakan PDF <= 28 MB agar cepat diunduh & dirender
+            pname = f"{item.get('name', '')} {item.get('folder_name', '')}".lower()
+            score = 0
+            for w in topic_words:
+                if w in pname:
+                    score += 5
+            for sb in synonym_boosts:
+                if sb in pname:
+                    score += 8
+            if any(k in pname for k in ("islam", "rasul", "nabi", "doa", "hadits", "fikih", "fiqih", "asmaul", "ibadah", "allah")):
+                score += 2
+            scored_pdfs.append((score, sz, item))
+
+        scored_pdfs.sort(key=lambda x: (-x[0], x[1]))
+        chosen_pdf = scored_pdfs[0][2] if scored_pdfs else catalog[0]
+        pdf_id = chosen_pdf["id"]
+        pdf_name = chosen_pdf["name"]
+
+        if pdf_id not in _EXTRACTED_PDF_PAGES_CACHE:
+            from googleapiclient.http import MediaIoBaseDownload
+            local_pdf = os.path.join(work_dir, f"ebook_{pdf_id}.pdf")
+            if not os.path.exists(local_pdf):
+                print(f"  [PDF DRIVE EBOOK] Mengambil ilustrasi buku sesuai topik: '{pdf_name}'...")
+                req = drive.files().get_media(fileId=pdf_id)
+                with io.FileIO(local_pdf, "wb") as fh:
+                    dl = MediaIoBaseDownload(fh, req, chunksize=8 * 1024 * 1024)
+                    done = False
+                    while not done:
+                        _, done = dl.next_chunk()
+
+            doc = fitz.open(local_pdf)
+            total_pages = len(doc)
+            # Lewati halaman sampul/katalog awal (mulai dari halaman ke-2 s/d sebelum halaman terakhir)
+            valid_pages = list(range(min(2, total_pages - 1), max(1, total_pages - 1))) or [0]
+            extracted_paths: List[str] = []
+            step = max(1, len(valid_pages) // 12)
+            sampled_pages = valid_pages[::step][:14]
+            for p_no in sampled_pages:
+                pg = doc[p_no]
+                pix = pg.get_pixmap(dpi=135, alpha=False)
+                im_pg = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                # Crop bagian ilustrasi utama halaman buku ke rasio 640x480 yang bersih & tajam
+                pw, ph = im_pg.size
+                target_r = 640.0 / 480.0
+                if (pw / float(max(1, ph))) > target_r:
+                    nw = int(ph * target_r)
+                    left = (pw - nw) // 2
+                    im_pg = im_pg.crop((left, 0, left + nw, ph))
+                else:
+                    nh = int(pw / target_r)
+                    top = max(0, (ph - nh) // 3)
+                    im_pg = im_pg.crop((0, top, pw, min(ph, top + nh)))
+                im_pg = im_pg.resize((640, 480), Image.Resampling.LANCZOS)
+                pg_jpg = os.path.join(work_dir, f"pdf_{pdf_id}_p{p_no:03d}.jpg")
+                im_pg.save(pg_jpg, "JPEG", quality=90)
+                extracted_paths.append(pg_jpg)
+            doc.close()
+            _EXTRACTED_PDF_PAGES_CACHE[pdf_id] = extracted_paths
+
+        pages_list = _EXTRACTED_PDF_PAGES_CACHE.get(pdf_id, [])
+        if pages_list:
+            pick_p = pages_list[(scene_num - 1) % len(pages_list)]
+            shutil.copy2(pick_p, out_jpg)
+            return True
+    except Exception as e:
+        print(f"  [INFO PDF DRIVE] Lewati ekstraksi PDF ({str(e)[:75]})")
+    return False
+
+
 def fetch_or_create_scene_illustration(
     scene: Dict[str, Any],
     topic_title: str,
@@ -1311,12 +1499,13 @@ def fetch_or_create_scene_illustration(
     scene["motion_style"] = m_style
     style_recipe = MOTION_FORMAT_STYLES.get(m_style, MOTION_FORMAT_STYLES["isometrik-dibongkar"])
 
-    # 1. Cari Gambar Nyata dari Internet (Wikimedia Commons & Openverse CC0/CC-BY)
+    # 0. PRIORITAS #1: Ambil Ilustrasi Animasi Islami dari Koleksi PDF Buku Bergambar di Google Drive (`11ovqUixuFNcSjGHP_KIwpRRzYp1qls0s`)
+    img1_ok = _get_topic_pdf_illustration_from_drive(topic_title, scene, scene_num, work_dir, out_jpg1)
+    img2_ok = False
+
+    # 1. Lengkapi dengan Gambar Masjid / Animasi Islami Bebas Copyright (Wikimedia Commons & Openverse CC0/CC-BY)
     search_queries = _extract_english_search_queries(scene, topic_title)
     internet_urls = _search_wikimedia_and_openverse_urls(search_queries, max_results=6)
-
-    img1_ok = False
-    img2_ok = False
 
     for u in internet_urls:
         if not img1_ok:
