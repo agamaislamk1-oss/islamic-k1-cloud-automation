@@ -437,12 +437,13 @@ def render_final_video(
     output_video_path: str = "",
     cut_last_seconds: float = 4.0,
     force_portrait: Optional[bool] = None,
+    show_lower_third: bool = True,
 ) -> float:
     """
     Memproses video secara lengkap dengan FFmpeg:
     1. Otomatis mendeteksi apakah video Landscape (1920x1080) atau Portrait Shorts (1080x1920).
     2. Memotong ekor akhir sesuai `cut_last_seconds` (Smart Salam Trim / 4s).
-    3. Menampilkan Pop-Up Lower-Third Banner Buku Mengaji Jilid 1-3 selama 6 detik di pertengahan video (Usulan 3).
+    3. Menampilkan Pop-Up Lower-Third Banner Buku Mengaji Jilid 1-3 selama 6 detik di pertengahan video (jika show_lower_third=True).
     4. Menyelipkan Kartu Visual + Suara Narator Promosi Buku Mengaji (Usulan 2) sebelum video SUBSCRIBE ISLAMIC K1.
     5. Menambahkan logo Islamic K1 ukuran kecil di pojok kanan atas sepanjang video.
     """
@@ -455,7 +456,7 @@ def render_final_video(
     lt_png = os.path.join(work_dir, "lower_third_promo.png")
     _create_lower_third_promo_png(lt_png, fonts_dir, is_portrait=is_vert)
     lt_start = min(35.0, max(4.0, trimmed_duration * 0.35))
-    lt_end = min(trimmed_duration - 0.5, lt_start + 6.5)
+    lt_end = min(trimmed_duration - 0.5, lt_start + 6.5) if show_lower_third else -1.0
 
     bumper_mp4 = _build_product_bumper_mp4(work_dir, fonts_dir, is_portrait=is_vert)
     target_w, target_h = (1080, 1920) if is_vert else (1920, 1080)
@@ -900,87 +901,37 @@ def render_image_to_shorts_video(
 ) -> float:
     """
     Mengubah gambar (baik Potret maupun Landscape) dari folder `05_Antrian_Gambar_Shorts`
-    menjadi Video YouTube Shorts 9:16 (1080x1920) lengkap dengan:
-    1. Penyesuaian otomatis rasio Potret 1080x1920 (jika gambar asli Landscape, otomatis diberi latar belakang
-       blur artistik + bingkai emas Islami agar utuh & tidak terpotong).
-    2. Gerakan kamera halus (Ken Burns Zoom/Pan) + Banner informasi Buku Catatan Mengaji di bagian bawah.
-    3. Instrumen bebas copyright tanpa vokal bernuansa Arab/Islami (Maqam Hijaz).
-    4. Logo Islamic K1 di pojok kanan atas.
+    menjadi Video YouTube Shorts 9:16 (1080x1920) TANPA bingkai dan TANPA latar blur yang menutupi gambar:
+    1. Gambar ditampilkan utuh 100% bersih di layar 1080x1920.
+    2. Instrumen bebas copyright tanpa vokal bernuansa Arab/Islami (Maqam Hijaz).
+    3. Logo Islamic K1 kecil di pojok kanan atas.
     """
     W, H = 1080, 1920
+    work_dir = os.path.dirname(os.path.abspath(output_video_path))
+    clean_png = os.path.join(work_dir, "img_short_clean.png")
+
     src_im = Image.open(image_path).convert("RGB")
     sw, sh = src_im.size
-    src_ratio = sw / float(max(1, sh))
+    canvas = Image.new("RGB", (W, H), (6, 24, 18))
 
-    # Buat 3 keyframe animasi zoom halus agar ringan & cepat di Cloud maupun Lokal
-    work_dir = os.path.dirname(os.path.abspath(output_video_path))
-    stage_pngs: List[str] = []
-    for st_i in range(3):
-        zoom_f = 1.0 + st_i * 0.035
-        canvas = Image.new("RGBA", (W, H), (6, 32, 24, 255))
-
-        # Latar belakang gradasi + blur dari gambar asli
-        bg_im = src_im.resize((W, H), Image.Resampling.BILINEAR).filter(ImageFilter.GaussianBlur(radius=28))
-        bg_im = ImageEnhance.Brightness(bg_im).enhance(0.32)
-        canvas.paste(bg_im.convert("RGBA"), (0, 0))
-
-        ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        odraw = ImageDraw.Draw(ov)
-        odraw.rounded_rectangle([24, 24, W - 24, H - 24], radius=28, outline=(255, 208, 0, 130), width=3)
-
-        if src_ratio < 0.72:
-            # Gambar sudah Potret: tampilkan besar memenuhi area utama (960x1540) dengan zoom halus
-            box_w, box_h = 968, 1520
-            box_x, box_y = (W - box_w) // 2, 140
-        else:
-            # Gambar Landscape atau Kotak: sesuaikan proporsional di tengah layar dengan bingkai emas elegan
-            box_w = 980
-            box_h = min(1320, max(620, int(box_w / src_ratio)))
-            box_x = (W - box_w) // 2
-            box_y = (H - box_h) // 2 - 40
-
-        zw, zh = int(box_w * zoom_f), int(box_h * zoom_f)
-        im_z = src_im.resize((zw, zh), Image.Resampling.LANCZOS)
-        lc, tc = (zw - box_w) // 2, (zh - box_h) // 2
-        im_crop = im_z.crop((lc, tc, lc + box_w, tc + box_h)).convert("RGBA")
-
-        odraw.rounded_rectangle(
-            [box_x - 6, box_y - 6, box_x + box_w + 6, box_y + box_h + 6],
-            radius=24, fill=(8, 40, 30, 245), outline=(255, 208, 0, 255), width=5,
-        )
-        canvas.paste(im_crop, (box_x, box_y))
-
-        # Banner Produk Buku Catatan Mengaji di Bagian Bawah (Zona Aman Shorts)
-        b_font = _load_bold_font(23, font_path)
-        s_font = _load_bold_font(20, font_path)
-        odraw.rounded_rectangle(
-            [48, 1690, W - 48, 1810],
-            radius=20, fill=(6, 28, 21, 238), outline=(255, 208, 0, 235), width=3,
-        )
-        odraw.text((76, 1708), "📖 BUKU CATATAN MATERI & AKTIVITAS MENGAJI (JILID 1-3)", font=b_font, fill=(255, 215, 35, 255))
-        odraw.text((76, 1748), "👉 Cek Link Pembelian Resmi & Donasi di Deskripsi Video!", font=s_font, fill=(255, 255, 255, 245))
-
-        png_p = os.path.join(work_dir, f"img_short_st_{st_i}.png")
-        Image.alpha_composite(canvas, ov).convert("RGB").save(png_p, "PNG")
-        stage_pngs.append(png_p)
+    # Sesuaikan gambar secara utuh (100% terlihat tanpa bingkai penutup & tanpa blur)
+    scale = min(W / float(max(1, sw)), H / float(max(1, sh)))
+    nw, nh = max(1, int(sw * scale)), max(1, int(sh * scale))
+    resized = src_im.resize((nw, nh), Image.Resampling.LANCZOS)
+    canvas.paste(resized, ((W - nw) // 2, (H - nh) // 2))
+    canvas.save(clean_png, "PNG")
 
     wav_path = os.path.join(work_dir, "hijaz_instrumental.wav")
     _generate_arabic_hijaz_instrumental_wav(duration_sec, wav_path)
 
-    concat_txt = os.path.join(work_dir, "img_short_frames.txt")
-    st_dur = duration_sec / 3.0
-    with open(concat_txt, "w", encoding="utf-8") as cf:
-        for p in stage_pngs:
-            cf.write(f"file '{p.replace(chr(92), '/')}'\n")
-            cf.write(f"duration {st_dur:.3f}\n")
-        cf.write(f"file '{stage_pngs[-1].replace(chr(92), '/')}'\n")
-
     raw_mp4 = os.path.join(work_dir, "img_short_raw.mp4")
     subprocess.run(
         [
-            "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_txt, "-i", wav_path,
-            "-vf", "fps=30,scale=1080:1920,setsar=1,format=yuv420p,fade=t=in:st=0:d=0.4,fade=t=out:st=19.2:d=0.6",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+            "ffmpeg", "-y",
+            "-loop", "1", "-framerate", "30", "-i", clean_png,
+            "-i", wav_path,
+            "-vf", "scale=1080:1920,setsar=1,format=yuv420p,fade=t=in:st=0:d=0.35",
+            "-c:v", "libx264", "-preset", "veryfast", "-tune", "stillimage", "-crf", "21",
             "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", "-shortest", raw_mp4,
         ],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
@@ -990,7 +941,7 @@ def render_image_to_shorts_video(
         subprocess.run(
             [
                 "ffmpeg", "-y", "-i", raw_mp4, "-i", logo_path,
-                "-filter_complex", "[1:v]scale=125:-1[lg];[0:v][lg]overlay=W-w-36:40:format=auto,format=yuv420p[vout]",
+                "-filter_complex", "[1:v]scale=120:-1[lg];[0:v][lg]overlay=W-w-32:36:format=auto,format=yuv420p[vout]",
                 "-map", "[vout]", "-map", "0:a",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-c:a", "copy", output_video_path,
             ],
@@ -1013,56 +964,33 @@ def render_image_and_audio_to_video(
     cut_last_seconds: float = 0.0,
 ) -> Tuple[float, bool]:
     """
-    Menggabungkan 1 Gambar (.jpg/.png/.webp) + 1 Audio (.m4a/.mp3/.wav) dari folder `06_Antrian_Gambar_Dan_Audio`,
-    menyesuaikan rasio gambar secara otomatis dengan bingkai emas Islami + latar belakang blur elegan,
-    menambahkan Pop-Up Buku Mengaji, Bumper Sampul Buku 1-3, Logo Islamic K1 di kanan atas,
-    dan menyambungkan video outro `SUBSCRIBE ISLAMIC K1.mp4` di bagian akhir!
-    Mengembalikan tuple: (final_duration, is_portrait_shorts).
+    Menggabungkan 1 Gambar (.jpg/.png/.webp) + 1 Audio (.m4a/.mp3/.wav) dari folder `06_Antrian_Gambar_Dan_Audio`
+    TANPA latar blur dan TANPA bingkai emas yang menutupi gambar:
+    - Gambar ditampilkan 100% utuh dan bersih sesuai rasio (Potret 1080x1920 jika gambar potret & audio pendek,
+      atau Landscape 1920x1080), lalu langsung disambung dengan Kartu Buku Mengaji & Outro `SUBSCRIBE ISLAMIC K1.mp4`!
     """
     audio_dur = get_video_duration(audio_path)
     src_im = Image.open(image_path).convert("RGB")
     sw, sh = src_im.size
-    src_ratio = sw / float(max(1, sh))
 
-    # Jika gambar Potret dan durasi audio <= 52 detik, jadikan YouTube Shorts (9:16); selain itu Landscape Full HD (16:9)
     is_vert = (sh > sw * 1.15) and (audio_dur <= 52.0)
     W, H = (1080, 1920) if is_vert else (1920, 1080)
 
     work_dir = os.path.dirname(os.path.abspath(output_video_path))
-    framed_png = os.path.join(work_dir, "img_audio_framed.png")
+    clean_png = os.path.join(work_dir, "img_audio_clean.png")
 
-    canvas = Image.new("RGBA", (W, H), (6, 32, 24, 255))
-    bg_im = src_im.resize((W, H), Image.Resampling.BILINEAR).filter(ImageFilter.GaussianBlur(radius=26))
-    bg_im = ImageEnhance.Brightness(bg_im).enhance(0.32)
-    canvas.paste(bg_im.convert("RGBA"), (0, 0))
-
-    ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    odraw = ImageDraw.Draw(ov)
-    odraw.rounded_rectangle([24, 24, W - 24, H - 24], radius=26, outline=(255, 208, 0, 140), width=3)
-
-    max_bw, max_bh = (W - 110, H - 220) if is_vert else (W - 160, H - 140)
-    if src_ratio > (max_bw / float(max_bh)):
-        box_w = max_bw
-        box_h = max(320, int(box_w / src_ratio))
-    else:
-        box_h = max_bh
-        box_w = max(320, int(box_h * src_ratio))
-
-    box_x = (W - box_w) // 2
-    box_y = (H - box_h) // 2
-    odraw.rounded_rectangle(
-        [box_x - 6, box_y - 6, box_x + box_w + 6, box_y + box_h + 6],
-        radius=22, fill=(8, 40, 30, 245), outline=(255, 208, 0, 255), width=5,
-    )
-    fg_im = src_im.resize((box_w, box_h), Image.Resampling.LANCZOS).convert("RGBA")
-    canvas.paste(fg_im, (box_x, box_y))
-    Image.alpha_composite(canvas, ov).convert("RGB").save(framed_png, "PNG")
+    canvas = Image.new("RGB", (W, H), (6, 24, 18))
+    scale = min(W / float(max(1, sw)), H / float(max(1, sh)))
+    nw, nh = max(1, int(sw * scale)), max(1, int(sh * scale))
+    resized = src_im.resize((nw, nh), Image.Resampling.LANCZOS)
+    canvas.paste(resized, ((W - nw) // 2, (H - nh) // 2))
+    canvas.save(clean_png, "PNG")
 
     combined_raw_mp4 = os.path.join(work_dir, "img_audio_combined_raw.mp4")
     subprocess.run(
         [
             "ffmpeg", "-y",
-            "-loop", "1", "-framerate", "30", "-i", framed_png,
+            "-loop", "1", "-framerate", "30", "-i", clean_png,
             "-i", audio_path,
             "-vf", f"scale={W}:{H},setsar=1,format=yuv420p",
             "-af", "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo",
@@ -1082,5 +1010,6 @@ def render_image_and_audio_to_video(
         output_video_path=output_video_path,
         cut_last_seconds=cut_last_seconds,
         force_portrait=is_vert,
+        show_lower_third=False,
     )
     return final_dur, is_vert

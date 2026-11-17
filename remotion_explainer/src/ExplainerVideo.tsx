@@ -409,7 +409,7 @@ const SceneCard: React.FC<{
     <AbsoluteFill
       style={{
         background: `radial-gradient(circle at 20% 20%, ${theme.bg1} 0%, ${theme.bg2} 100%)`,
-        fontFamily: "'Segoe UI', 'DejaVu Sans', Arial, sans-serif",
+        fontFamily: "'Mala\\'s Handwriting', 'Comic Sans MS', 'Segoe Print', cursive, sans-serif",
         color: "#ffffff",
         padding: "42px 72px",
         opacity: fadeOut,

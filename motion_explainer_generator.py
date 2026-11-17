@@ -100,16 +100,48 @@ SCENE_THEMES: Dict[str, Dict[str, Tuple[int, int, int]]] = {
     },
 }
 
-# 7 Gaya Visual Sinematik dari Motion Format v2 (Integrasi E:\Motion Course\motion-format)
+# 7 Gaya Visual Sinematik dari Motion Format v2 (KHUSUS ANIMASI ISLAMI & MASJID INDAH)
 MOTION_FORMAT_STYLES: Dict[str, str] = {
-    "isometrik-dibongkar": "3D isometric cutaway diagram illustration, glowing technical blueprint lines, cross-section layers, clean dark studio lighting, no text",
-    "sejarah-3d": "cinematic 3D historical architecture and Islamic civilization scene, warm golden sunbeams, atmospheric mist, epic lighting, no text",
-    "tubuh-anime": "vibrant Makoto Shinkai anime style educational illustration, glowing biological and natural particles, twilight sky gradient, no text",
-    "dunia-2d": "artistic textured 2D storybook illustration, warm watercolor and classic engraving style, soft paper grain, rich narrative feel, no text",
-    "kartun-cel": "bright 2D cel-shaded cartoon educational illustration, bold clean outlines, expressive visual storytelling, vibrant colors, no text",
-    "peta-relief": "3D cinematic topographic relief map, glowing route path and location marker, elevated terrain contours, dramatic lighting, no text",
-    "promo-produk": "modern 3D spotlight hero educational showcase, floating geometric accents, high-contrast emerald and gold studio lighting, no text",
+    "isometrik-dibongkar": "3D Pixar Islamic animation illustration of a grand mosque with golden dome and minarets, glowing architectural cutaway, warm lighting, no text",
+    "sejarah-3d": "cinematic 3D Islamic animation of a majestic historical mosque and courtyard, warm golden sunbeams, peaceful atmosphere, no text",
+    "tubuh-anime": "vibrant Makoto Shinkai anime style Islamic illustration of a serene mosque at twilight sky with glowing stars and crescent moon, no text",
+    "dunia-2d": "artistic 2D Islamic storybook animation of a beautiful mosque and garden, warm watercolor style, rich peaceful feel, no text",
+    "kartun-cel": "bright 2D cel-shaded Islamic cartoon animation of a cheerful mosque and Muslim educational scene, vibrant colors, no text",
+    "peta-relief": "3D Islamic animation illustration of a historic mosque landmark and glowing courtyard, warm dramatic lighting, no text",
+    "promo-produk": "modern 3D Islamic animation showcase of a glowing golden dome mosque with emerald and gold studio lighting, no text",
 }
+
+
+def _load_attractive_motion_font(size: int, fallback_font_path: str = "") -> ImageFont.FreeTypeFont:
+    """
+    Memuat font yang menarik & ekspresif untuk video Google Form & Shorts:
+    Prioritas #1: Mala's Handwriting (dari 00_Assets) atau Comic Sans MS / Segoe Print!
+    """
+    bundled_mala = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "Mala's Handwriting.otf")
+    user_mala = os.path.expanduser("~/.local/share/fonts/MalaHandwriting.otf")
+    win_mala = os.path.expanduser(r"~\AppData\Local\Microsoft\Windows\Fonts\Mala's Handwriting.otf")
+    candidates = [
+        fallback_font_path,
+        bundled_mala,
+        user_mala,
+        win_mala,
+        r"C:\Windows\Fonts\comicbd.ttf",
+        r"C:\Windows\Fonts\comic.ttf",
+        r"C:\Windows\Fonts\segoesc.ttf",
+        "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ]
+    for p in candidates:
+        if p and os.path.exists(p):
+            try:
+                return ImageFont.truetype(p, size)
+            except Exception:
+                continue
+    return ImageFont.load_default()
+
+
+# Gunakan font menarik (Mala's Handwriting / Comic Sans) di seluruh render Motion Grafis & Shorts
+_load_bold_font = _load_attractive_motion_font
 
 
 def select_motion_format_style(scene: Dict[str, Any], scene_idx: int, topic_title: str) -> str:
@@ -1060,56 +1092,37 @@ def _draw_vector_icon(draw: ImageDraw.ImageDraw, cx: int, cy: int, radius: int, 
 _USED_INTERNET_IMAGE_URLS: set = set()
 
 
+_MOSQUE_AND_ISLAMIC_QUERIES = [
+    "Sheikh Zayed Grand Mosque architecture dome",
+    "Al-Masjid an-Nabawi Medina mosque dome",
+    "Sultan Ahmed Blue Mosque Istanbul architecture",
+    "Masjid al-Haram Mecca Islamic architecture",
+    "Putra Mosque Malaysia Islamic architecture",
+    "Umayyad Mosque Damascus courtyard",
+    "Baiturrahman Grand Mosque Aceh Indonesia",
+    "Istiqlal Mosque Jakarta Islamic architecture",
+    "Hassan II Mosque Casablanca architecture",
+    "Quba Mosque Medina Islamic architecture",
+    "Great Mosque of Cordoba arches",
+    "Islamic geometric dome mosque architecture",
+]
+
+
 def _extract_english_search_queries(scene: Dict[str, Any], topic_title: str) -> List[str]:
-    """Menyusun daftar kata kunci pencarian gambar internet (Inggris & Indonesia) yang relevan dengan topik & scene."""
-    queries: List[str] = []
-    raw_prompt = str(scene.get("image_prompt", "")).strip()
-    headline = str(scene.get("headline", "")).strip()
-    chapter = str(scene.get("chapter_title", "")).strip()
-
-    # Bersihkan kata-kata instruksi gaya dari image_prompt untuk mendapat inti objek visual dalam bahasa Inggris
-    if raw_prompt:
-        cleaned = re.sub(
-            r"(?i)\b(3d|pixar|disney|style|educational|illustration|explaining|vibrant|colors|clean|composition|cinematic|lighting|no text|warm|isometric|cutaway|diagram|cartoon|cel-shaded|anime|makoto shinkai|storybook|watercolor|of|showing|about)\b",
-            " ",
-            raw_prompt,
-        )
-        cleaned = re.sub(r"[^a-zA-Z0-9\s-]", " ", cleaned)
-        words = [w for w in cleaned.split() if len(w) > 2]
-        if words:
-            queries.append(" ".join(words[:5]))
-            if len(words) > 3:
-                queries.append(" ".join(words[:3]))
-
-    # Kamus cepat istilah populer Islami/Sains/Sejarah agar pencarian Wikimedia/Wikipedia sangat akurat
-    id_to_en_map = {
-        "thariq bin ziyad": "Tariq ibn Ziyad Andalusia Gibraltar",
-        "andalusia": "Alhambra Cordoba Islamic Spain",
-        "gibraltar": "Rock of Gibraltar Strait",
-        "muawiyah": "Umayyad Mosque Damascus Caliphate",
-        "pesawat": "Airplane aerodynamics wing flight",
-        "sayap": "Airfoil wing lift aerodynamics",
-        "mesin jet": "Turbofan jet engine aircraft",
-        "habibie": "B. J. Habibie N-250 aircraft",
-        "pelangi": "Rainbow spectrum light refraction raindrops",
-        "burung": "Bird flight wings sky",
-        "soekarno": "Sukarno Indonesia proclamation",
-        "riyadhus shalihin": "Islamic calligraphy Quran manuscript mosque",
-        "masjid": "Grand Mosque Islamic architecture",
-        "al-quran": "Quran open manuscript calligraphy",
-        "sedekah": "Islamic charity Sadaqah helping",
-        "shalat": "Muslim prayer mosque sujud",
-    }
-    combined_id = f"{topic_title} {headline} {chapter}".lower()
-    for k_id, v_en in id_to_en_map.items():
-        if k_id in combined_id:
-            queries.insert(0, v_en)
-
-    if headline:
-        queries.append(f"{topic_title} {headline} Islamic")
-    queries.append(f"{topic_title} Islamic")
-    queries.append(topic_title)
-    return list(dict.fromkeys([q.strip() for q in queries if q.strip()]))
+    """
+    Sesuai permintaan pengguna: HANYA menggunakan gambar Masjid Indah atau Animasi Islami
+    untuk seluruh video Google Form dan Shorts!
+    """
+    scene_num = int(scene.get("scene_number", 1))
+    idx1 = (scene_num - 1) % len(_MOSQUE_AND_ISLAMIC_QUERIES)
+    idx2 = (scene_num + 3) % len(_MOSQUE_AND_ISLAMIC_QUERIES)
+    idx3 = (scene_num + 7) % len(_MOSQUE_AND_ISLAMIC_QUERIES)
+    return [
+        _MOSQUE_AND_ISLAMIC_QUERIES[idx1],
+        _MOSQUE_AND_ISLAMIC_QUERIES[idx2],
+        _MOSQUE_AND_ISLAMIC_QUERIES[idx3],
+        "Grand Mosque Islamic dome minaret architecture",
+    ]
 
 
 _BLOCKED_NON_ISLAMIC_IMAGE_TERMS = (
@@ -1228,11 +1241,9 @@ def _create_rich_styled_fallback_image(
     out_jpg: str,
     variant: int = 1,
 ) -> None:
-    """Membuat visual ilustrasi bergaya Motion Format v2 (Isometrik/Peta/Sejarah/Anime) jika offline."""
+    """Menggambar Ilustrasi Animasi Masjid Megah (Kubah Emas, Menara Kembar, Bulan Sabit & Bintang) jika server gambar sibuk."""
     theme_name = str(scene.get("theme", "emerald_gold")).lower()
     theme = SCENE_THEMES.get(theme_name, SCENE_THEMES["emerald_gold"])
-    m_style = str(scene.get("motion_style", "isometrik-dibongkar"))
-    headline = str(scene.get("headline", topic_title)).strip()
     canvas = Image.new("RGBA", (640, 480), theme["bg_top"] + (255,))
     cdraw = ImageDraw.Draw(canvas)
     for y in range(0, 480, 4):
@@ -1243,23 +1254,35 @@ def _create_rich_styled_fallback_image(
         g = int(c1[1] * (1 - t) + c2[1] * t)
         b = int(c1[2] * (1 - t) + c2[2] * t)
         cdraw.rectangle([0, y, 640, y + 4], fill=(r, g, b, 255))
-    acc = theme["accent"]
-    if m_style == "isometrik-dibongkar":
-        for i in range(-3, 10):
-            cdraw.line([(0, i * 60), (640, i * 60 + 180)], fill=acc + (45,), width=2)
-            cdraw.line([(i * 80, 0), (i * 80 - 160, 480)], fill=acc + (35,), width=2)
-    elif m_style == "peta-relief":
-        for rad in (60, 105, 150, 195, 240):
-            cdraw.ellipse([320 - int(rad * 1.3), 210 - rad, 320 + int(rad * 1.3), 210 + rad], outline=acc + (65,), width=3)
-    else:
-        for rad in (85, 135, 185, 235):
-            cdraw.ellipse([320 - rad, 200 - rad, 320 + rad, 200 + rad], outline=acc + (55,), width=3)
-    _draw_vector_icon(cdraw, cx=320, cy=185, radius=82, icon_type=str(scene.get("icon_type", "mosque")), color=acc)
-    cap_font = _load_bold_font(25, font_path)
-    wrapped = textwrap.wrap(headline.upper(), width=26)[:2]
-    for idx_l, line_s in enumerate(wrapped):
-        cdraw.text((54, 335 + idx_l * 36), line_s, font=cap_font, fill=(255, 255, 255, 245))
-    canvas.convert("RGB").save(out_jpg, "JPEG", quality=88)
+
+    acc = theme["accent"] + (255,)
+    soft = theme["accent_soft"] + (255,)
+    # Langit malam/senja berbintang & bulan sabit
+    for sx, sy in [(90, 65), (160, 110), (490, 70), (550, 120), (260, 55), (390, 60)]:
+        cdraw.ellipse([sx - 4, sy - 4, sx + 4, sy + 4], fill=soft)
+    cdraw.ellipse([500, 45, 555, 100], fill=acc)
+    cdraw.ellipse([514, 40, 565, 92], fill=theme["bg_top"] + (255,))
+
+    # Menara Kiri & Kanan Masjid
+    for mx in (135, 505):
+        cdraw.rectangle([mx - 22, 155, mx + 22, 390], fill=(235, 245, 240, 255), outline=acc, width=3)
+        cdraw.pieslice([mx - 26, 120, mx + 26, 185], start=180, end=360, fill=acc)
+        cdraw.line([(mx, 95), (mx, 125)], fill=acc, width=4)
+
+    # Kubah Utama Emas & Bangunan Utama Masjid
+    cdraw.pieslice([210, 130, 430, 320], start=180, end=360, fill=acc, outline=soft, width=3)
+    cdraw.line([(320, 95), (320, 135)], fill=acc, width=5)
+    cdraw.rounded_rectangle([165, 235, 475, 395], radius=12, fill=(242, 248, 245, 255), outline=acc, width=4)
+
+    # Pintu & Jendela Lengkung Bercahaya
+    for wx in (215, 320, 425):
+        w_rad = 34 if wx == 320 else 22
+        cdraw.rounded_rectangle([wx - w_rad, 275, wx + w_rad, 392], radius=w_rad, fill=theme["bg_top"] + (255,), outline=acc, width=3)
+
+    # Halaman Masjid
+    cdraw.rectangle([0, 392, 640, 480], fill=theme["highlight_bg"] + (255,))
+    cdraw.line([(0, 392), (640, 392)], fill=acc, width=4)
+    canvas.convert("RGB").save(out_jpg, "JPEG", quality=90)
 
 
 def fetch_or_create_scene_illustration(
@@ -1358,13 +1381,6 @@ def _paste_zoomed_rounded_photo(
         return
     try:
         x1, y1, bw, bh = box
-        overlay_draw.rounded_rectangle(
-            [x1 - 5, y1 - 5, x1 + bw + 5, y1 + bh + 5],
-            radius=22,
-            fill=card_bg + (245,),
-            outline=border_col,
-            width=4,
-        )
         im_src = Image.open(photo_path).convert("RGB")
         zw, zh = max(bw + 20, int(bw * zoom_factor)), max(bh + 20, int(bh * zoom_factor))
         im_zoomed = im_src.resize((zw, zh), Image.Resampling.LANCZOS)
@@ -1373,6 +1389,14 @@ def _paste_zoomed_rounded_photo(
         top_c = max(0, min(zh - bh, (zh - bh) // 2 + py))
         im_cropped = im_zoomed.crop((left_c, top_c, left_c + bw, top_c + bh)).convert("RGBA")
         base_img.paste(im_cropped, (x1, y1))
+        # PENTING: fill=None agar lapisan overlay TIDAK menutupi gambar yang sudah ditempel di base_img!
+        overlay_draw.rounded_rectangle(
+            [x1 - 4, y1 - 4, x1 + bw + 4, y1 + bh + 4],
+            radius=20,
+            fill=None,
+            outline=border_col,
+            width=4,
+        )
         if caption_text:
             c_font = _load_bold_font(18, font_path)
             overlay_draw.rounded_rectangle(

@@ -674,26 +674,45 @@ def is_form_request_already_uploaded(
     audience: str,
     history_data: Dict[str, Any],
     existing_yt_videos: List[Dict[str, str]],
+    youtube=None,
 ) -> Tuple[bool, str]:
     """
-    Anti-Duplikat 3 Lapis untuk antrian Google Form Motion Grafis:
-    1. Cek apakah kombinasi Judul + Audience sudah tercatat di `processed_form_requests` pada database Google Drive.
-    2. Cek apakah kode referensi `[Ref:GF_...]` sudah ada di deskripsi video di channel YouTube Islamic K1.
-    3. Cek apakah judul yang identik sudah terupload di channel YouTube Islamic K1.
+    Anti-Duplikat 3 Lapis untuk antrian Google Form Motion Grafis + Verifikasi Eksistensi Nyata di YouTube:
+    Jika video sebelumnya sudah dihapus manual oleh pengguna di YouTube, maka otomatis dibuat & diupload ulang!
     """
     norm_key, ref_tag = _make_form_request_id(title, audience)
     processed_forms = history_data.get("processed_form_requests", {})
     if norm_key in processed_forms:
         vid_id = processed_forms[norm_key].get("youtube_video_id", "")
-        return True, f"Sudah pernah dibuat & diupload dari Google Form (YouTube ID: {vid_id})."
+        if vid_id and not _verify_youtube_video_still_exists(youtube, vid_id):
+            print(f"[RE-CREATE FORM] Video Google Form '{title}' ({vid_id}) sudah dihapus dari YouTube. Memproses ulang!")
+            processed_forms.pop(norm_key, None)
+        else:
+            return True, f"Sudah pernah dibuat & diupload dari Google Form (YouTube ID: {vid_id})."
 
     norm_title = normalize_key(title)
+    stale_yt_ids = set()
     for yt_vid in existing_yt_videos:
+        matched_f = False
+        reason_f = ""
         if f"[Ref:{ref_tag}]" in yt_vid.get("description", ""):
-            return True, f"Kode referensi {ref_tag} sudah ada di video YouTube '{yt_vid['title']}' ({yt_vid['video_id']})."
-        yt_norm_title = normalize_key(yt_vid["title"])
-        if len(norm_title) >= 8 and norm_title == yt_norm_title:
-            return True, f"Judul identik sudah ada di channel YouTube: '{yt_vid['title']}' ({yt_vid['video_id']})."
+            matched_f = True
+            reason_f = f"Kode referensi {ref_tag} sudah ada di video YouTube '{yt_vid['title']}' ({yt_vid['video_id']})."
+        else:
+            yt_norm_title = normalize_key(yt_vid["title"])
+            if len(norm_title) >= 8 and norm_title == yt_norm_title:
+                matched_f = True
+                reason_f = f"Judul identik sudah ada di channel YouTube: '{yt_vid['title']}' ({yt_vid['video_id']})."
+        if matched_f:
+            vid_id = yt_vid.get("video_id", "")
+            if vid_id and not _verify_youtube_video_still_exists(youtube, vid_id):
+                stale_yt_ids.add(vid_id)
+                continue
+            return True, reason_f
+
+    if stale_yt_ids:
+        existing_yt_videos[:] = [v for v in existing_yt_videos if v.get("video_id") not in stale_yt_ids]
+        history_data["cached_youtube_videos"] = existing_yt_videos
 
     return False, ""
 
@@ -947,7 +966,7 @@ def process_google_form_explainer_queue(
         ref_tag = req["ref_tag"]
         drive_file_id = req.get("drive_file_id")
 
-        already_done, reason = is_form_request_already_uploaded(title, audience, history_data, existing_yt_videos)
+        already_done, reason = is_form_request_already_uploaded(title, audience, history_data, existing_yt_videos, youtube=youtube)
         if already_done:
             print(f"[SKIP GOOGLE FORM] '{title}' ({audience}) dilewati: {reason}")
             if drive_file_id:
