@@ -48,13 +48,8 @@ def _ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
 
 socket.getaddrinfo = _ipv4_only_getaddrinfo
 
-try:
-    import pytz
-    TZ_WIB = pytz.timezone("Asia/Jakarta")
-    TZ_UTC = pytz.UTC
-except ImportError:
-    TZ_WIB = timezone(timedelta(hours=7))
-    TZ_UTC = timezone.utc
+TZ_WIB = timezone(timedelta(hours=7))
+TZ_UTC = timezone.utc
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
@@ -82,6 +77,9 @@ from book_cover_helper import (
     format_uniform_youtube_title,
     get_book_cover_image,
     determine_target_playlist_titles,
+    determine_kitab_schedule_weekday,
+    parse_muawiyah_episode,
+    is_already_valid_kitab_title,
 )
 from motion_explainer_generator import build_complete_explainer_package
 
@@ -552,24 +550,80 @@ def add_video_to_matching_playlists(youtube, video_id: str, original_filename: s
             print(f"[PERINGATAN] Gagal menambahkan ke playlist '{pl_title}': {e}")
 
 
-def compute_next_prime_time_utc(recommended_slot: str, last_scheduled_iso: Optional[str]) -> str:
+def compute_next_prime_time_utc(
+    recommended_slot: str,
+    last_scheduled_iso: Optional[str],
+    history_data: Optional[Dict[str, Any]] = None,
+) -> str:
     """
     Menentukan waktu tayang terjadwal (Scheduled Publish) pada jam Prime Time Keluarga Muslim (WIB / UTC+7):
-    - SUBUH: 05:00 WIB
-    - SIANG: 12:00 WIB
-    - MALAM: 19:00 WIB
-    Memastikan setiap video terbit berurutan satu per satu dengan jeda waktu yang ideal.
+    - SUBUH: 05:00 WIB (22:00 UTC hari sebelumnya)
+    - SIANG: 12:00 WIB (05:00 UTC)
+    - MALAM: 19:00 WIB (12:00 UTC)
+    PENTING (Sesuai Instruksi Poin 4):
+    - Jadwal video selain Seri Kitab TIDAK terpengaruh oleh jadwal Seri Kitab (18.30 WIB).
+    - Otomatis mengisi slot 05:00, 12:00, 19:00 WIB yang masih kosong secara berurutan tanpa ada tanggal/jam yang terlewati!
     """
     now_wib = datetime.now(TZ_WIB)
-
     prime_hours = [5, 12, 19]
+
+    if history_data is not None:
+        # Kumpulkan seluruh slot 05:00, 12:00, 19:00 WIB yang sudah terisi oleh video NON-KITAB yang masih aktif
+        occupied_wib_slots = set()
+        for _, info in history_data.get("uploaded_files", {}).items():
+            if not info.get("youtube_video_id"):
+                continue
+            orig_n = info.get("original_name", "")
+            yt_t = info.get("youtube_title", "")
+            if determine_kitab_schedule_weekday(orig_n, yt_t) is not None:
+                continue  # Abaikan jadwal Seri Kitab (18.30 WIB) agar tidak menggeser video non-kitab
+            if parse_muawiyah_episode(orig_n, yt_t) is not None:
+                continue  # Abaikan jadwal Seri Ramadhan Muawiyah Ibn Abi Sufyan (05.30 WIB) agar tidak menggeser video lain
+            sched_iso = info.get("scheduled_publish_at")
+            if sched_iso:
+                try:
+                    dt_w = datetime.fromisoformat(sched_iso.replace("Z", "+00:00")).astimezone(TZ_WIB)
+                    if dt_w > now_wib:
+                        occupied_wib_slots.add(dt_w.strftime("%Y-%m-%d %H:%M"))
+                except Exception:
+                    pass
+
+        for _, finfo in history_data.get("processed_form_requests", {}).items():
+            if not finfo.get("youtube_video_id"):
+                continue
+            sched_iso = finfo.get("scheduled_publish_at")
+            if sched_iso:
+                try:
+                    dt_w = datetime.fromisoformat(sched_iso.replace("Z", "+00:00")).astimezone(TZ_WIB)
+                    if dt_w > now_wib:
+                        occupied_wib_slots.add(dt_w.strftime("%Y-%m-%d %H:%M"))
+                except Exception:
+                    pass
+
+        # Cari tanggal terakhir dari video non-kitab yang sudah terjadwal, namun mulai dari slot kosong pertama jika ada celah
+        start_day = now_wib.replace(hour=0, minute=0, second=0, microsecond=0)
+        if occupied_wib_slots:
+            latest_str = max(occupied_wib_slots)
+            latest_dt = datetime.strptime(latest_str, "%Y-%m-%d %H:%M").replace(tzinfo=TZ_WIB)
+            # Mulai pengecekan dari tanggal video non-kitab terakhir agar berurutan rapi (05:00 -> 12:00 -> 19:00)
+            start_day = max(start_day, latest_dt.replace(hour=0, minute=0, second=0, microsecond=0))
+
+        for d_offset in range(0, 400):
+            day_dt = start_day + timedelta(days=d_offset)
+            for h in prime_hours:
+                cand_wib = day_dt.replace(hour=h, minute=0, second=0, microsecond=0)
+                if cand_wib <= now_wib + timedelta(minutes=30):
+                    continue
+                slot_key = cand_wib.strftime("%Y-%m-%d %H:%M")
+                if slot_key not in occupied_wib_slots:
+                    return cand_wib.astimezone(TZ_UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     slot_map = {"SUBUH": 5, "SIANG": 12, "MALAM": 19}
     preferred_hour = slot_map.get(recommended_slot.upper(), 19)
 
     if not last_scheduled_iso:
         candidate = now_wib.replace(hour=preferred_hour, minute=0, second=0, microsecond=0)
         if candidate <= now_wib + timedelta(minutes=30):
-            # Cari jam prime time terdekat berikutnya
             next_candidates = []
             for d_offset in [0, 1]:
                 for h in prime_hours:
@@ -590,6 +644,77 @@ def compute_next_prime_time_utc(recommended_slot: str, last_scheduled_iso: Optio
 
     candidate_utc = candidate.astimezone(TZ_UTC)
     return candidate_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def compute_muawiyah_ramadhan_publish_time_utc(filename: str, raw_title: str = "") -> Optional[str]:
+    """
+    Jadwal Khusus Bulan Ramadhan 1448 H (2027) untuk Seri 'Muawiyah Ibn Abi Sufyan':
+    - Ditayangkan berurutan dari awal Ramadhan (1 Ramadhan 1448 H = Senin, 8 Februari 2027)
+      sampai akhir Ramadhan (30 Ramadhan 1448 H = Selasa, 9 Maret 2027),
+      SETIAP HARI pukul 05.30 WIB (22:30:00Z UTC hari sebelumnya).
+    - Episode / Bagian ke-N otomatis dipetakan ke Hari ke-N Ramadhan pukul 05.30 WIB:
+      * Episode 1  -> 1 Ramadhan 1448 H (8 Februari 2027 pukul 05.30 WIB = 2027-02-07T22:30:00Z)
+      * Episode 2  -> 2 Ramadhan 1448 H (9 Februari 2027 pukul 05.30 WIB = 2027-02-08T22:30:00Z)
+      * ...
+      * Episode 30 -> 30 Ramadhan 1448 H (9 Maret 2027 pukul 05.30 WIB = 2027-03-08T22:30:00Z)
+    """
+    ep_num = parse_muawiyah_episode(filename, raw_title)
+    if ep_num is None:
+        return None
+    ramadhan_day_1_wib = datetime(2027, 2, 8, 5, 30, 0, tzinfo=TZ_WIB)
+    target_wib = ramadhan_day_1_wib + timedelta(days=max(0, ep_num - 1))
+    return target_wib.astimezone(TZ_UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def compute_kitab_weekly_publish_time_utc(
+    filename: str,
+    raw_title: str,
+    history_data: Dict[str, Any],
+    is_shorts: bool = False,
+) -> Optional[str]:
+    """
+    Menghitung jadwal tayang khusus untuk:
+    1. Seri Muawiyah Ibn Abi Sufyan -> Setiap hari selama Bulan Ramadhan pukul 05.30 WIB berurutan (1 s/d 30 Ramadhan)
+    2. Seri Kajian Kitab (Setiap pekan pukul 18.30 WIB = 11:30 UTC) mulai Senin, 23 November 2026 pukul 18.30 WIB:
+       - Senin  (weekday=0) jam 18.30 WIB : Kitab Bidayatul Hidayah / Tasawuf / Akhlak / Adab
+       - Selasa (weekday=1) jam 18.30 WIB : Kitab Fathul Qarib / Ahkamith Thaharah / Fikih
+       - Rabu   (weekday=2) jam 18.30 WIB : Kitab Tafsir al-Munir / Al-Qur'an
+       - Kamis  (weekday=3) jam 18.30 WIB : Kitab Mawlid al-Barzanji / Sirah / Sejarah
+       - Jum'at (weekday=4) jam 18.30 WIB : Kitab Jauharatut Tauhid / Tauhid / Aqidah
+    """
+    muawiyah_iso = compute_muawiyah_ramadhan_publish_time_utc(filename, raw_title)
+    if muawiyah_iso:
+        return muawiyah_iso
+
+    sched_info = determine_kitab_schedule_weekday(filename, raw_title)
+    if not sched_info:
+        return None
+
+    target_weekday, slot_key, bagian_num = sched_info
+    now_wib = datetime.now(TZ_WIB)
+
+    # Titik awal "Minggu Depan": Senin, 23 November 2026 pukul 18:30 WIB (atau hari yang sesuai setelah now_wib)
+    base_monday_wib = datetime(2026, 11, 23, 18, 30, 0, tzinfo=TZ_WIB)
+    first_slot_wib = base_monday_wib + timedelta(days=target_weekday)
+    while first_slot_wib <= now_wib + timedelta(hours=1):
+        first_slot_wib += timedelta(days=7)
+
+    map_key = f"{slot_key}_SHORTS" if is_shorts else slot_key
+    kitab_sched_map = history_data.setdefault("kitab_weekly_schedule_map", {})
+    last_slot_iso = kitab_sched_map.get(map_key)
+
+    if not last_slot_iso:
+        candidate_wib = first_slot_wib
+    else:
+        last_dt_wib = datetime.fromisoformat(last_slot_iso.replace("Z", "+00:00")).astimezone(TZ_WIB)
+        candidate_wib = last_dt_wib + timedelta(days=7)
+        while candidate_wib <= now_wib + timedelta(hours=1):
+            candidate_wib += timedelta(days=7)
+        candidate_wib = candidate_wib.replace(hour=18, minute=30, second=0, microsecond=0)
+
+    iso_utc = candidate_wib.astimezone(TZ_UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    kitab_sched_map[map_key] = iso_utc
+    return iso_utc
 
 
 def prepare_assets(drive, assets_folder_id: str, work_dir: str) -> Tuple[str, str, str]:
@@ -677,44 +802,123 @@ def is_form_request_already_uploaded(
     youtube=None,
 ) -> Tuple[bool, str]:
     """
-    Anti-Duplikat 3 Lapis untuk antrian Google Form Motion Grafis + Verifikasi Eksistensi Nyata di YouTube:
-    Jika video sebelumnya sudah dihapus manual oleh pengguna di YouTube, maka otomatis dibuat & diupload ulang!
+    Anti-Duplikat Permanen untuk antrian Google Form Motion Grafis (Sesuai Instruksi Poin 2):
+    Jika sebuah materi dari Google Form SUDAH PERNAH dibuat & diupload ke YouTube (meskipun videonya masih terjadwal/private
+    ataupun kemudian dihapus oleh pengguna di YouTube), sistem TIDAK AKAN PERNAH membuat ulang materi tersebut lagi!
     """
     norm_key, ref_tag = _make_form_request_id(title, audience)
     processed_forms = history_data.get("processed_form_requests", {})
     if norm_key in processed_forms:
         vid_id = processed_forms[norm_key].get("youtube_video_id", "")
-        if vid_id and not _verify_youtube_video_still_exists(youtube, vid_id):
-            print(f"[RE-CREATE FORM] Video Google Form '{title}' ({vid_id}) sudah dihapus dari YouTube. Memproses ulang!")
-            processed_forms.pop(norm_key, None)
-        else:
-            return True, f"Sudah pernah dibuat & diupload dari Google Form (YouTube ID: {vid_id})."
+        return (
+            True,
+            f"Sudah pernah dibuat & diupload dari Google Form (YouTube ID: {vid_id}) — dikunci permanen agar tidak dibuat ulang.",
+        )
 
     norm_title = normalize_key(title)
-    stale_yt_ids = set()
     for yt_vid in existing_yt_videos:
-        matched_f = False
-        reason_f = ""
         if f"[Ref:{ref_tag}]" in yt_vid.get("description", ""):
-            matched_f = True
-            reason_f = f"Kode referensi {ref_tag} sudah ada di video YouTube '{yt_vid['title']}' ({yt_vid['video_id']})."
-        else:
-            yt_norm_title = normalize_key(yt_vid["title"])
-            if len(norm_title) >= 8 and norm_title == yt_norm_title:
-                matched_f = True
-                reason_f = f"Judul identik sudah ada di channel YouTube: '{yt_vid['title']}' ({yt_vid['video_id']})."
-        if matched_f:
-            vid_id = yt_vid.get("video_id", "")
-            if vid_id and not _verify_youtube_video_still_exists(youtube, vid_id):
-                stale_yt_ids.add(vid_id)
-                continue
-            return True, reason_f
-
-    if stale_yt_ids:
-        existing_yt_videos[:] = [v for v in existing_yt_videos if v.get("video_id") not in stale_yt_ids]
-        history_data["cached_youtube_videos"] = existing_yt_videos
+            return True, f"Kode referensi {ref_tag} sudah ada di video YouTube '{yt_vid['title']}' ({yt_vid['video_id']})."
+        yt_norm_title = normalize_key(yt_vid["title"])
+        if len(norm_title) >= 8 and norm_title == yt_norm_title:
+            return True, f"Judul identik sudah ada di channel YouTube: '{yt_vid['title']}' ({yt_vid['video_id']})."
 
     return False, ""
+
+
+def sync_google_form_status_to_sheet(drive, root_id: str, form_queue_id: str, history_data: Dict[str, Any]) -> None:
+    """
+    Menuliskan keterangan status 'SUDAH DIUPLOAD: https://youtu.be/<ID>' langsung ke dalam file Google Sheet
+    (`Form_Motion_Grafis_IslamicK1`) untuk semua baris Google Form yang sudah pernah diproses,
+    sehingga meskipun video masih Private/Terjadwal atau sudah dihapus di YouTube, baris tersebut tetap bertanda SUDAH DIUPLOAD.
+    """
+    processed_forms = history_data.get("processed_form_requests", {})
+    if not processed_forms:
+        return
+    sheet_query = (
+        f"mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false and "
+        f"(name contains '{FORM_SHEET_NAME}' or name contains 'Motion Grafis' or name contains 'Form_Motion_Grafis' "
+        f"or '{root_id}' in parents or '{form_queue_id}' in parents)"
+    )
+    try:
+        import openpyxl
+
+        sheet_res = drive.files().list(q=sheet_query, fields="files(id, name)", pageSize=10).execute(num_retries=3)
+        for sh in sheet_res.get("files", []):
+            try:
+                xlsx_bytes = (
+                    drive.files()
+                    .export(
+                        fileId=sh["id"],
+                        mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                    .execute(num_retries=3)
+                )
+                wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
+                modified = False
+                for ws in wb.worksheets:
+                    if ws.max_row <= 1:
+                        continue
+                    headers = [str(ws.cell(1, c).value or "").strip().lower() for c in range(1, ws.max_column + 1)]
+                    title_col = 2 if len(headers) >= 2 else 1
+                    aud_col = 3 if len(headers) >= 3 else -1
+                    status_col = -1
+                    for c_i, col_name in enumerate(headers, start=1):
+                        if any(k in col_name for k in ["judul", "topik", "title", "topic", "materi"]):
+                            title_col = c_i
+                        elif any(k in col_name for k in ["audience", "audiens", "target", "penonton", "sasaran", "kelas"]):
+                            aud_col = c_i
+                        elif any(k in col_name for k in ["status", "keterangan", "youtube"]):
+                            status_col = c_i
+                    if status_col == -1:
+                        status_col = ws.max_column + 1
+                        ws.cell(1, status_col, "Status YouTube (Otomatis)")
+                        modified = True
+
+                    for r_i in range(2, ws.max_row + 1):
+                        r_title = str(ws.cell(r_i, title_col).value or "").strip()
+                        if not r_title:
+                            continue
+                        r_aud = (
+                            str(ws.cell(r_i, aud_col).value or "").strip()
+                            if aud_col > 0 and str(ws.cell(r_i, aud_col).value or "").strip()
+                            else "Keluarga & Pelajar Muslim"
+                        )
+                        nk, _ = _make_form_request_id(r_title, r_aud)
+                        rec = processed_forms.get(nk)
+                        if not rec:
+                            # Coba cocokkan hanya berdasarkan judul jika audiens default
+                            for p_k, p_v in processed_forms.items():
+                                if normalize_key(p_v.get("form_title", "")) == normalize_key(r_title):
+                                    rec = p_v
+                                    break
+                        if rec:
+                            vid_id = rec.get("youtube_video_id", "")
+                            cur_st = str(ws.cell(r_i, status_col).value or "").strip()
+                            expected_st = f"SUDAH DIUPLOAD: https://youtu.be/{vid_id}"
+                            if "SUDAH" not in cur_st.upper():
+                                ws.cell(r_i, status_col, expected_st)
+                                modified = True
+
+                if modified:
+                    tmp_xlsx = tempfile.mktemp(suffix=".xlsx")
+                    wb.save(tmp_xlsx)
+                    media = MediaFileUpload(
+                        tmp_xlsx,
+                        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        resumable=False,
+                    )
+                    drive.files().update(fileId=sh["id"], media_body=media).execute(num_retries=3)
+                    del media
+                    try:
+                        os.remove(tmp_xlsx)
+                    except OSError:
+                        pass
+                    print(f"[GOOGLE SHEET STATUS] Kolom 'Status YouTube' di '{sh['name']}' berhasil diperbarui otomatis!")
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 def _extract_all_rows_from_spreadsheet(drive, sheet_id: str) -> List[List[List[str]]]:
@@ -950,6 +1154,7 @@ def process_google_form_explainer_queue(
     Mengembalikan (jumlah_video_form_diproses, history_file_id_terbaru, kuota_youtube_habis).
     """
     youtube, drive = get_google_services()
+    sync_google_form_status_to_sheet(drive, root_id, form_queue_id, history_data)
     pending_requests = fetch_pending_google_form_requests(drive, root_id, form_queue_id)
     if not pending_requests:
         print("[GOOGLE FORM] Tidak ada antrian baru dari Google Form Motion Grafis.")
@@ -1020,10 +1225,20 @@ def process_google_form_explainer_queue(
                     del vid_media_drive
                     print(f"[DRIVE ANTRIAN] Tersimpan di 03_Antrian_Google_Form_MotionGrafis (ID: {rendered_drive_vid_id}).")
 
-                publish_at_iso = compute_next_prime_time_utc(
-                    recommended_slot=pkg.get("recommended_publish_slot", "MALAM"),
-                    last_scheduled_iso=history_data.get("last_scheduled_iso"),
+                kitab_pub_iso = compute_kitab_weekly_publish_time_utc(
+                    filename=title,
+                    raw_title=pkg["title"],
+                    history_data=history_data,
+                    is_shorts=False,
                 )
+                if kitab_pub_iso:
+                    publish_at_iso = kitab_pub_iso
+                else:
+                    publish_at_iso = compute_next_prime_time_utc(
+                        recommended_slot=pkg.get("recommended_publish_slot", "MALAM"),
+                        last_scheduled_iso=history_data.get("last_scheduled_iso"),
+                        history_data=history_data,
+                    )
                 full_description = f"{pkg['full_description']}\n\n[Ref:{ref_tag}]"
 
                 localizations_map = pkg.get("localizations", {})
@@ -1103,8 +1318,10 @@ def process_google_form_explainer_queue(
                     }
                 )
                 history_data["cached_youtube_videos"] = existing_yt_videos
-                history_data["last_scheduled_iso"] = publish_at_iso
+                if not kitab_pub_iso:
+                    history_data["last_scheduled_iso"] = publish_at_iso
                 history_file_id = save_upload_history(drive, root_id, history_data, history_file_id)
+                sync_google_form_status_to_sheet(drive, root_id, form_queue_id, history_data)
 
                 # Pindahkan video hasil render dari 03_Antrian_Google_Form_MotionGrafis ke 02_Sudah_Diupload_YouTube
                 if rendered_drive_vid_id:
@@ -1272,10 +1489,20 @@ def process_image_shorts_queue(
                     is_shorts=True,
                 )
 
-                publish_at_iso = compute_next_prime_time_utc(
-                    recommended_slot="SIANG",
-                    last_scheduled_iso=history_data.get("last_scheduled_iso"),
+                kitab_pub_iso = compute_kitab_weekly_publish_time_utc(
+                    filename=img_f["name"],
+                    raw_title=ai_data["title"],
+                    history_data=history_data,
+                    is_shorts=True,
                 )
+                if kitab_pub_iso:
+                    publish_at_iso = kitab_pub_iso
+                else:
+                    publish_at_iso = compute_next_prime_time_utc(
+                        recommended_slot="SIANG",
+                        last_scheduled_iso=history_data.get("last_scheduled_iso"),
+                        history_data=history_data,
+                    )
                 md5_ref = (img_f.get("md5Checksum") or img_f["id"])[:10]
                 full_description = f"{ai_data['full_description']}\n\n[Ref:IMG_{md5_ref}]"
 
@@ -1338,7 +1565,8 @@ def process_image_shorts_queue(
                 }
                 existing_yt_videos.append({"video_id": vid_id, "title": ai_data["title"], "description": full_description})
                 history_data["cached_youtube_videos"] = existing_yt_videos
-                history_data["last_scheduled_iso"] = publish_at_iso
+                if not kitab_pub_iso:
+                    history_data["last_scheduled_iso"] = publish_at_iso
                 history_file_id = save_upload_history(drive, root_id, history_data, history_file_id)
 
                 move_drive_file(drive, img_f["id"], image_queue_id, done_id)
@@ -1838,10 +2066,20 @@ def process_image_and_audio_queue(
                     uniform_title = f"{uniform_title[:88]} #Shorts"
                 ai_data["title"] = uniform_title
 
-                publish_at_iso = compute_next_prime_time_utc(
-                    recommended_slot=ai_data.get("recommended_publish_slot", "MALAM"),
-                    last_scheduled_iso=history_data.get("last_scheduled_iso"),
+                kitab_pub_iso = compute_kitab_weekly_publish_time_utc(
+                    filename=aud_f["name"],
+                    raw_title=uniform_title,
+                    history_data=history_data,
+                    is_shorts=is_vert_short,
                 )
+                if kitab_pub_iso:
+                    publish_at_iso = kitab_pub_iso
+                else:
+                    publish_at_iso = compute_next_prime_time_utc(
+                        recommended_slot=ai_data.get("recommended_publish_slot", "MALAM"),
+                        last_scheduled_iso=history_data.get("last_scheduled_iso"),
+                        history_data=history_data,
+                    )
                 md5_ref = (aud_f.get("md5Checksum") or aud_f["id"])[:10]
                 full_description = f"{ai_data['full_description']}\n\n[Ref:M4A_{md5_ref}]"
 
@@ -1920,7 +2158,8 @@ def process_image_and_audio_queue(
                 }
                 existing_yt_videos.append({"video_id": vid_id, "title": uniform_title, "description": full_description})
                 history_data["cached_youtube_videos"] = existing_yt_videos
-                history_data["last_scheduled_iso"] = publish_at_iso
+                if not kitab_pub_iso:
+                    history_data["last_scheduled_iso"] = publish_at_iso
                 history_file_id = save_upload_history(drive, root_id, history_data, history_file_id)
 
                 move_drive_file(drive, aud_f["id"], img_audio_queue_id, done_id)
@@ -2119,10 +2358,20 @@ def run_queue_pipeline():
                     uniform_title = f"{uniform_title[:88]} #Shorts"
                 ai_data["title"] = uniform_title
 
-                publish_at_iso = compute_next_prime_time_utc(
-                    recommended_slot=ai_data.get("recommended_publish_slot", "MALAM"),
-                    last_scheduled_iso=history_data.get("last_scheduled_iso"),
+                kitab_pub_iso = compute_kitab_weekly_publish_time_utc(
+                    filename=target_file["name"],
+                    raw_title=uniform_title,
+                    history_data=history_data,
+                    is_shorts=is_vert_nlm,
                 )
+                if kitab_pub_iso:
+                    publish_at_iso = kitab_pub_iso
+                else:
+                    publish_at_iso = compute_next_prime_time_utc(
+                        recommended_slot=ai_data.get("recommended_publish_slot", "MALAM"),
+                        last_scheduled_iso=history_data.get("last_scheduled_iso"),
+                        history_data=history_data,
+                    )
                 md5_ref = (target_file.get("md5Checksum") or target_file["id"])[:10]
                 full_description = f"{ai_data['full_description']}\n\n[Ref:{md5_ref}]"
                 if is_vert_nlm and "#shorts" not in full_description.lower():
@@ -2234,8 +2483,10 @@ def run_queue_pipeline():
                     }
                 )
                 history_data["cached_youtube_videos"] = existing_yt_videos
-                history_data["last_scheduled_iso"] = publish_at_iso
+                if not kitab_pub_iso:
+                    history_data["last_scheduled_iso"] = publish_at_iso
                 history_file_id = save_upload_history(drive, root_id, history_data, history_file_id)
+                sync_google_form_status_to_sheet(drive, root_id, form_queue_id, history_data)
 
                 move_drive_file(drive, target_file["id"], queue_id, done_id)
                 processed_count += 1
@@ -2262,50 +2513,229 @@ def run_queue_pipeline():
             print(f"[PERINGATAN] Gagal memproses file '{target_file['name']}': {file_err}")
             break
 
-    # 5. Jika antrian video baru sudah selesai (atau masih ada sisa kuota), perbarui bertahap (maks 3 per sesi)
-    #    Judul Seragam + Playlist untuk video lama tanpa membuat/mengubah thumbnail!
+    # 5A. Sinkronisasi Jadwal Khusus (Ramadhan 05.30 WIB untuk Seri Muawiyah Ibn Abi Sufyan,
+    #     Mingguan 18.30 WIB untuk Seri Kajian Kitab, dan Slot Rapat 05:00/12:00/19:00 WIB untuk Non-Kitab)
     uploaded_map = history_data.get("uploaded_files", {})
-    needs_v3_upgrade = [
-        (fid, info)
-        for fid, info in uploaded_map.items()
-        if not info.get("upgraded_v3_cover_title_playlist") and info.get("youtube_video_id")
-    ]
+    schedule_updates = []
+    base_monday_kitab_wib = datetime(2026, 11, 23, 18, 30, 0, tzinfo=TZ_WIB)
+
+    # Kelompokkan Kitab per weekday dan urutkan berdasarkan Bagian Ke-N agar teratur tiap minggu pukul 18.30 WIB
+    kitab_by_weekday: Dict[Tuple[int, bool], List[Tuple[int, str, Dict[str, Any]]]] = {}
+    non_kitab_pushed = []
+
+    for fid, info in uploaded_map.items():
+        vid_id = info.get("youtube_video_id")
+        if not vid_id or vid_id == "N1_9RX2ZMP8":
+            continue
+        orig_n = info.get("original_name", "")
+        cur_t = info.get("youtube_title", "")
+        cur_sched = info.get("scheduled_publish_at", "")
+
+        # 1) Cek apakah Seri Muawiyah Ibn Abi Sufyan (Ramadhan pukul 05.30 WIB berurutan Episode 1..30)
+        muawiyah_iso = compute_muawiyah_ramadhan_publish_time_utc(orig_n, cur_t)
+        if muawiyah_iso:
+            if cur_sched != muawiyah_iso:
+                schedule_updates.append((fid, info, muawiyah_iso, f"RAMADHAN 05.30 WIB (Ep {parse_muawiyah_episode(orig_n, cur_t)})"))
+            continue
+
+        # 2) Cek apakah Seri Kajian Kitab (Senin-Sabtu pukul 18.30 WIB)
+        k_sched = determine_kitab_schedule_weekday(orig_n, cur_t)
+        if k_sched is not None:
+            w_idx, s_key, b_num = k_sched
+            is_sh = "#shorts" in cur_t.lower() or orig_n.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+            kitab_by_weekday.setdefault((w_idx, is_sh), []).append((b_num if b_num is not None else 999, fid, info))
+            continue
+
+        # 3) Cek apakah video Non-Kitab yang sempat terdorong ke April/Mei 2027 oleh jadwal kitab
+        if cur_sched and cur_sched >= "2027-04-01T00:00:00Z":
+            non_kitab_pushed.append((fid, info))
+
+    for (w_idx, is_sh), k_list in kitab_by_weekday.items():
+        k_list.sort(key=lambda x: x[0])
+        first_day_wib = base_monday_kitab_wib + timedelta(days=w_idx)
+        for seq_idx, (b_num, fid, info) in enumerate(k_list):
+            # Gunakan urutan sekuensial (0, 1, 2...) berdasarkan Bagian yang sudah diurutkan agar tidak ada minggu yang bolong
+            target_dt_wib = first_day_wib + timedelta(days=7 * seq_idx)
+            target_iso = target_dt_wib.astimezone(TZ_UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+            if info.get("scheduled_publish_at") != target_iso:
+                schedule_updates.append((fid, info, target_iso, f"KITAB HARI KE-{w_idx + 1} 18.30 WIB (Bagian {b_num})"))
+
+    # Tarik video Non-Kitab yang sempat terdorong ke April/Mei 2027 kembali ke slot 05:00/12:00/19:00 WIB setelah 21 Maret 2027
+    if non_kitab_pushed:
+        temp_assigned_wib = set()
+        now_w = datetime.now(TZ_WIB)
+        for _, inf_o in uploaded_map.items():
+            if not inf_o.get("youtube_video_id"):
+                continue
+            on_o = inf_o.get("original_name", "")
+            yt_o = inf_o.get("youtube_title", "")
+            if determine_kitab_schedule_weekday(on_o, yt_o) is not None or parse_muawiyah_episode(on_o, yt_o) is not None:
+                continue
+            sc_o = inf_o.get("scheduled_publish_at", "")
+            if sc_o and sc_o < "2027-04-01T00:00:00Z":
+                try:
+                    dt_o = datetime.fromisoformat(sc_o.replace("Z", "+00:00")).astimezone(TZ_WIB)
+                    if dt_o > now_w:
+                        temp_assigned_wib.add(dt_o.strftime("%Y-%m-%d %H:%M"))
+                except Exception:
+                    pass
+        base_march_day = datetime(2027, 3, 21, 0, 0, 0, tzinfo=TZ_WIB)
+        if temp_assigned_wib:
+            latest_m = max(temp_assigned_wib)
+            base_march_day = datetime.strptime(latest_m, "%Y-%m-%d %H:%M").replace(
+                hour=0, minute=0, second=0, microsecond=0, tzinfo=TZ_WIB
+            )
+        for fid, info in non_kitab_pushed:
+            found_slot_iso = None
+            for d_off in range(0, 120):
+                d_cur = base_march_day + timedelta(days=d_off)
+                for hr in (5, 12, 19):
+                    c_wib = d_cur.replace(hour=hr, minute=0, second=0, microsecond=0)
+                    s_key = c_wib.strftime("%Y-%m-%d %H:%M")
+                    if s_key not in temp_assigned_wib and c_wib > now_w:
+                        temp_assigned_wib.add(s_key)
+                        found_slot_iso = c_wib.astimezone(TZ_UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+                        break
+                if found_slot_iso:
+                    break
+            if found_slot_iso and info.get("scheduled_publish_at") != found_slot_iso:
+                schedule_updates.append((fid, info, found_slot_iso, "RAPATKAN SLOT NON-KITAB"))
+
+    if schedule_updates:
+        print(f"[JADWAL KHUSUS] Menyinkronkan jadwal tayang YouTube untuk {len(schedule_updates)} video (Muawiyah Ramadhan 05.30 WIB / Kitab 18.30 WIB / Non-Kitab)...")
+        for fid, info, new_iso, lbl in schedule_updates[:65]:
+            vid_id = info["youtube_video_id"]
+            try:
+                youtube, drive = get_google_services()
+                youtube.videos().update(
+                    part="status",
+                    body={
+                        "id": vid_id,
+                        "status": {
+                            "privacyStatus": "private",
+                            "publishAt": new_iso,
+                            "selfDeclaredMadeForKids": False,
+                            "containsSyntheticMedia": True,
+                            "embeddable": True,
+                            "publicStatsViewable": True,
+                        },
+                    },
+                ).execute(num_retries=2)
+                info["scheduled_publish_at"] = new_iso
+                history_file_id = save_upload_history(drive, root_id, history_data, history_file_id)
+                print(f"  [JADWAL OK] [{lbl}] {info.get('original_name')} ({vid_id}) -> {new_iso}")
+            except HttpError as he:
+                if "quotaExceeded" in str(he):
+                    print("[INFO KUOTA] Kuota harian YouTube tercapai saat sinkronisasi jadwal, akan dilanjutkan otomatis setelah reset kuota.")
+                    break
+                print(f"  [LEWATI JADWAL] {vid_id}: {str(he)[:80]}")
+            except Exception as e:
+                print(f"  [LEWATI JADWAL] {vid_id}: {str(e)[:80]}")
+
+    # 5B. Perbarui otomatis Judul Seragam (Materi Pelajaran `I <Mapel> <Kelas> I Bab <N>` & Kajian Kitab `Bagian Ke (N) - Kitab (X), Bab (Y) - Fashal (Z)`)
+    #     serta Playlist untuk video yang sudah diupload tanpa membuat/mengubah thumbnail!
+    needs_v3_upgrade = []
+    seen_upgrade_vid_ids = set()
+
+    for fid, info in uploaded_map.items():
+        vid_id = info.get("youtube_video_id")
+        if not vid_id:
+            continue
+        seen_upgrade_vid_ids.add(vid_id)
+        orig_name = info.get("original_name", "Materi PAI")
+        old_yt_title = info.get("youtube_title", orig_name)
+        is_sh = "#shorts" in old_yt_title.lower() or orig_name.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+        expected_title = format_uniform_youtube_title(old_yt_title, orig_name, is_shorts=is_sh)
+        if not info.get("upgraded_v3_cover_title_playlist") or old_yt_title != expected_title:
+            needs_v3_upgrade.append((fid, info, expected_title))
+
+    # Cek juga riwayat Google Form (misal Syarah Kitab Riyadhus Shalihin atau Materi Pelajaran dari Form)
+    for fk, finfo in history_data.get("processed_form_requests", {}).items():
+        vid_id = finfo.get("youtube_video_id")
+        if not vid_id or vid_id in seen_upgrade_vid_ids:
+            continue
+        seen_upgrade_vid_ids.add(vid_id)
+        f_title = finfo.get("form_title", "")
+        old_yt_title = finfo.get("youtube_title", f_title)
+        expected_title = format_uniform_youtube_title(old_yt_title, f_title, is_shorts=False)
+        if old_yt_title != expected_title:
+            finfo["original_name"] = f_title
+            needs_v3_upgrade.append((fk, finfo, expected_title))
+
+    # Utamakan video terbaru terlebih dahulu (seperti Al-Qur'an Hadis 12, Kajian Kitab, & Al-Qur'an Hadis 1-5)
+    needs_v3_upgrade.reverse()
+
     if needs_v3_upgrade:
-        batch_v3 = needs_v3_upgrade[:3]
+        batch_v3 = needs_v3_upgrade[:85]
         print(
-            f"[UPGRADE JUDUL & PLAYLIST BERTAHAP] Memperbarui Judul Seragam & Playlist (tanpa ubah thumbnail) untuk {len(batch_v3)} dari {len(needs_v3_upgrade)} video lama..."
+            f"[UPGRADE JUDUL & PLAYLIST] Memperbarui Judul Seragam (Mapel / Kajian Kitab) untuk {len(batch_v3)} dari {len(needs_v3_upgrade)} video yang belum sesuai..."
         )
-        for fid, info in batch_v3:
+        # Ambil snippet secara batch (maks 50 ID sekaligus = hanya 1 unit kuota API!)
+        snippet_map: Dict[str, Dict[str, Any]] = {}
+        try:
+            youtube, drive = get_google_services()
+            all_b_ids = [inf["youtube_video_id"] for _, inf, _ in batch_v3 if inf.get("youtube_video_id")]
+            for i_chunk in range(0, len(all_b_ids), 45):
+                chunk_ids = all_b_ids[i_chunk : i_chunk + 45]
+                v_res = youtube.videos().list(part="snippet", id=",".join(chunk_ids)).execute(num_retries=3)
+                for v_it in v_res.get("items", []):
+                    snippet_map[v_it["id"]] = v_it["snippet"]
+        except Exception as b_err:
+            print(f"[INFO BATCH LIST] {b_err}")
+
+        for fid, info, uniform_title in batch_v3:
             try:
                 youtube, drive = get_google_services()
                 vid_id = info["youtube_video_id"]
                 orig_name = info.get("original_name", "Materi PAI")
                 old_yt_title = info.get("youtube_title", orig_name)
+                was_already_in_pl = bool(info.get("upgraded_v3_cover_title_playlist"))
 
-                uniform_title = format_uniform_youtube_title(old_yt_title, orig_name)
-                vid_res = youtube.videos().list(part="snippet", id=vid_id).execute(num_retries=3)
-                vid_items = vid_res.get("items", [])
-                if vid_items:
-                    snippet = vid_items[0]["snippet"]
-                    if snippet.get("title") != uniform_title:
-                        snippet["title"] = uniform_title
-                        youtube.videos().update(
-                            part="snippet",
-                            body={"id": vid_id, "snippet": snippet},
-                        ).execute(num_retries=3)
-                        print(f"[JUDUL SERAGAM] '{old_yt_title}' -> '{uniform_title}'")
-                    info["youtube_title"] = uniform_title
+                snippet = snippet_map.get(vid_id)
+                if not snippet:
+                    vid_res = youtube.videos().list(part="snippet", id=vid_id).execute(num_retries=3)
+                    vid_items = vid_res.get("items", [])
+                    if vid_items:
+                        snippet = vid_items[0]["snippet"]
 
-                add_video_to_matching_playlists(
-                    youtube=youtube,
-                    video_id=vid_id,
-                    original_filename=orig_name,
-                    ai_playlist_name="Kajian Keluarga Muslim",
-                )
+                if snippet:
+                    live_yt_title = snippet.get("title", "")
+                    # Jika video Kajian Kitab sudah diubah manual oleh pengguna di YouTube Studio dan sesuai aturan, JANGAN diubah lagi!
+                    if determine_kitab_schedule_weekday(orig_name, live_yt_title) is not None and is_already_valid_kitab_title(live_yt_title):
+                        info["youtube_title"] = live_yt_title
+                        for cv in existing_yt_videos:
+                            if cv.get("video_id") == vid_id:
+                                cv["title"] = live_yt_title
+                        print(f"[SKIP JUDUL KITAB SUDAH SESUAI DI YOUTUBE] '{live_yt_title}' ({vid_id})")
+                    else:
+                        if live_yt_title != uniform_title:
+                            snippet["title"] = uniform_title
+                            youtube.videos().update(
+                                part="snippet",
+                                body={"id": vid_id, "snippet": snippet},
+                            ).execute(num_retries=3)
+                            print(f"[JUDUL SERAGAM DIPERBARUI] '{live_yt_title}' -> '{uniform_title}'")
+                        info["youtube_title"] = uniform_title
+                        for cv in existing_yt_videos:
+                            if cv.get("video_id") == vid_id:
+                                cv["title"] = uniform_title
+
+                if not was_already_in_pl:
+                    add_video_to_matching_playlists(
+                        youtube=youtube,
+                        video_id=vid_id,
+                        original_filename=orig_name,
+                        ai_playlist_name="Kajian Keluarga Muslim",
+                    )
 
                 info["upgraded_v3_cover_title_playlist"] = True
                 history_file_id = save_upload_history(drive, root_id, history_data, history_file_id)
                 print(f"[UPGRADE BERHASIL] {orig_name} ({vid_id}) -> {uniform_title}")
+            except HttpError as he:
+                if "quotaExceeded" in str(he):
+                    print("[INFO KUOTA] Kuota harian YouTube tercapai saat update judul, akan otomatis dilanjutkan saat reset kuota berikutnya.")
+                    break
+                print(f"[PERINGATAN] Gagal memperbarui judul/playlist untuk {fid}: {he}")
             except Exception as e:
                 print(f"[PERINGATAN] Gagal memperbarui judul/playlist untuk {fid}: {e}")
                 break
