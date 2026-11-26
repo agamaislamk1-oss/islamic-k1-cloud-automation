@@ -517,9 +517,16 @@ Kembalikan HANYA JSON murni.
         data = build_fallback_metadata(clean_base, duration, [])
 
     title_final = str(data.get("title") or clean_base).strip()
+    try:
+        from book_cover_helper import format_uniform_youtube_title
+
+        title_final = format_uniform_youtube_title(title_final, title_or_filename, is_shorts=is_shorts)
+    except Exception:
+        if is_shorts and "#shorts" not in title_final.lower():
+            title_final = f"{title_final[:82]} #Shorts"
     if is_shorts and "#shorts" not in title_final.lower():
-        title_final = f"{title_final[:82]} #Shorts"
-    data["title"] = title_final[:98]
+        title_final = f"{title_final[:88]} #Shorts"
+    data["title"] = title_final[:100]
 
     paragraphs = data.get("description_paragraphs", [])
     if len(paragraphs) < 3:
