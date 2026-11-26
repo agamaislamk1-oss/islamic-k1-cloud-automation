@@ -529,7 +529,7 @@ const SceneCard: React.FC<{
             );
           })}
           <span style={{ marginLeft: 8, fontSize: 15, fontWeight: 900, color: theme.accent, letterSpacing: 0.8 }}>
-            GAYA: {styleBadgeText}
+            📖 {(scene.section_badge || scene.headline || topicTitle).toUpperCase().slice(0, 30)}
           </span>
         </div>
       </div>
@@ -797,7 +797,7 @@ const SceneCard: React.FC<{
                 letterSpacing: 0.6
               }}
             >
-              🎬 {styleBadgeText} • SCENE {String(scene.scene_number).padStart(2, "0")}
+              📌 {(scene.headline || scene.section_badge || topicTitle).toUpperCase().slice(0, 38)}
             </div>
           </div>
         )}
