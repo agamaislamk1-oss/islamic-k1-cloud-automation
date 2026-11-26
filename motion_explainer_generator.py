@@ -26,6 +26,7 @@ import json
 import time
 import shutil
 import asyncio
+import tempfile
 import textwrap
 import subprocess
 from typing import Dict, Any, List, Optional, Tuple
@@ -705,8 +706,9 @@ TUGAS UTAMA ANDA:
 Buat paket lengkap **Video Motion Grafis Explainer berdurasi sekitar 3 MENIT (~170–190 detik)** yang terdiri dari **TEPAT 10 SCENE (Babak)** dalam bahasa Indonesia yang sangat mengalir, hangat, jelas, dan disesuaikan dengan tingkat pemahaman **{clean_audience}**.
 
 ATURAN WAJIB NASKAH & VIDEO (JANGAN DILANGGAR):
-1. **Durasi 3 Menit (~400 hingga 460 kata total)**:
-   - Setiap scene (`scenes` 1 s/d 10) WAJIB memiliki `narration_text` sepanjang **38 hingga 46 kata** (3-4 kalimat lengkap yang natural saat dibacakan narator), sehingga total 10 scene menghasilkan durasi bicara sekitar 2 menit 50 detik + jeda & video outro Subscribe menjadi ~3 menit!
+1. **Durasi 3 Menit (~400 hingga 460 kata total) & Gaya Bicara Luwes/Storytelling**:
+   - Setiap scene (`scenes` 1 s/d 10) WAJIB memiliki `narration_text` sepanjang **38 hingga 46 kata** (3-4 kalimat pendek-menengah yang sangat luwes, ekspresif, hangat, dan mengalir alami seperti guru/ustadz favorit yang sedang bercerita langsung, BUKAN bahasa kaku buku teks).
+   - Gunakan kata sapaan, transisi percakapan, atau kalimat tanya retoris ringan (seperti *"Nah, sahabat..."*, *"Pernahkah kita membayangkan..."*, *"Masya Allah, menarik sekali bukan?"*, *"Lalu, apa rahasianya?"*) dengan jeda koma (`,`) yang pas agar intonasi suara narator terdengar hidup dan bernyawa.
 2. **Pembuka & Penutup Wajib**:
    - **Scene 1 (`scene_number`: 1)**: `narration_text` WAJIB dimulai dengan ucapan salam lengkap: *"Assalamu'alaikum warahmatullahi wabarakatuh..."*, dilanjutkan kalimat syukur singkat, menyapa **{clean_audience}** secara hangat, lalu memperkenalkan topik **"{clean_topic}"** dengan pembuka yang memikat.
    - **Scene 10 (`scene_number`: 10)**: `narration_text` WAJIB berisi kesimpulan singkat yang menyentuh hati, **ajakan jelas untuk klik tombol Subscribe, Like, dan membagikan video channel Islamic K1**, doa kebaikan, dan WAJIB ditutup dengan salam lengkap: *"Wassalamu'alaikum warahmatullahi wabarakatuh."*
@@ -889,10 +891,10 @@ Kembalikan HANYA JSON murni yang valid dengan struktur berikut:
     return data
 
 
-async def _edge_tts_save(text: str, voice: str, rate: str, out_path: str) -> None:
+async def _edge_tts_save(text: str, voice: str, rate: str, out_path: str, pitch: str = "+2Hz") -> None:
     import edge_tts
 
-    communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate)
+    communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate, pitch=pitch)
     await communicate.save(out_path)
 
 
@@ -957,6 +959,20 @@ def apply_islamic_phonetic_pronunciation(text: str) -> str:
         (r"(?i)\brabbina\b", "robbina"),
         (r"(?i)\brabbi\b", "robbi"),
         (r"(?i)\bsakhkhara\b", "sakhkhoro"),
+        # Penghalus apostrof & kata serapan Arab agar TTS membaca sangat luwes tanpa tersendat di tanda petik
+        (r"(?i)\bal-qur'an\b", "Al-Quran"),
+        (r"(?i)\bqur'an\b", "Quran"),
+        (r"(?i)\bta'ala\b", "Ta ala"),
+        (r"(?i)\bmu'min\b", "mukmin"),
+        (r"(?i)\bmu'minin\b", "mukminin"),
+        (r"(?i)\btaqwa\b", "takwa"),
+        (r"(?i)\bustadz\b", "ustaz"),
+        (r"(?i)\bdzikir\b", "zikir"),
+        (r"(?i)\bsyafa'at\b", "syafaat"),
+        (r"(?i)\bdo'a\b", "doa"),
+        (r"(?i)\bjum'at\b", "Jumat"),
+        (r"(?i)\bni'mat\b", "nikmat"),
+        (r"(?i)\bmu'jizat\b", "mukjizat"),
     ]
     out = text
     for pattern, repl in phonetic_rules:
@@ -964,17 +980,86 @@ def apply_islamic_phonetic_pronunciation(text: str) -> str:
     return out
 
 
+async def _edge_tts_multi_sentences_save(
+    sentences: List[str],
+    voice: str,
+    out_raw_mp3: str,
+    work_dir_tmp: str,
+) -> bool:
+    """
+    Menyintesis suara narator per kalimat dengan variasi intonasi percakapan alami (Dynamic Sentence Prosody):
+    - Kalimat tanya / sapaan hangat -> sedikit lebih ekspresif (+3% rate, +3Hz pitch)
+    - Kalimat penjelasan inti -> tenang & hangat (+1% rate, +1Hz pitch)
+    - Kalimat hikmah / doa / penutup -> khidmat & menyentuh (0% rate, +1Hz pitch)
+    Setiap kalimat dipisahkan jeda napas alami 240ms agar suara narator sangat luwes dan tidak kaku.
+    """
+    import edge_tts
+
+    part_files: List[str] = []
+    for idx, sent in enumerate(sentences):
+        s_clean = sent.strip()
+        if not s_clean:
+            continue
+        s_low = s_clean.lower()
+        if "?" in s_clean or "!" in s_clean or any(k in s_low for k in ("tahukah", "pernahkah", "apa kabar", "selamat datang", "nah,", "bayangkan")):
+            rate, pitch = "+3%", "+3Hz"
+        elif any(k in s_low for k in ("semoga", "wassalamu", "demikianlah", "alhamdulillah", "subhanahu", "mari kita")):
+            rate, pitch = "+0%", "+1Hz"
+        elif idx % 2 == 0:
+            rate, pitch = "+2%", "+2Hz"
+        else:
+            rate, pitch = "+1%", "+1Hz"
+
+        part_mp3 = os.path.join(work_dir_tmp, f"tts_sent_{idx:02d}.mp3")
+        comm = edge_tts.Communicate(text=s_clean, voice=voice, rate=rate, pitch=pitch)
+        await comm.save(part_mp3)
+        if os.path.exists(part_mp3) and os.path.getsize(part_mp3) > 300:
+            part_files.append(part_mp3)
+
+    if not part_files:
+        return False
+
+    if len(part_files) == 1:
+        shutil.copy2(part_files[0], out_raw_mp3)
+        return True
+
+    # Gabungkan antar-kalimat dengan jeda napas alami 230ms (apad=pad_dur=0.23 pada tiap kalimat)
+    filter_parts = []
+    concat_inputs = []
+    cmd = ["ffmpeg", "-y"]
+    for i, pf in enumerate(part_files):
+        cmd.extend(["-i", pf])
+        pad_d = 0.23 if i < len(part_files) - 1 else 0.05
+        filter_parts.append(f"[{i}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,apad=pad_dur={pad_d}[a{i}]")
+        concat_inputs.append(f"[a{i}]")
+
+    fc = ";".join(filter_parts) + ";" + "".join(concat_inputs) + f"concat=n={len(part_files)}:v=0:a=1[aout]"
+    cmd.extend(["-filter_complex", fc, "-map", "[aout]", "-c:a", "libmp3lame", "-b:a", "192k", out_raw_mp3])
+    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    return os.path.exists(out_raw_mp3) and os.path.getsize(out_raw_mp3) > 1000
+
+
 def synthesize_tts_audio(text: str, output_mp3_path: str, voice_gender: str = "male") -> float:
     """
-    Menghasilkan suara narator Bahasa Indonesia jernih (100% GRATIS):
-    - Prioritas 1: Microsoft Edge Neural TTS (`id-ID-ArdiNeural` atau `id-ID-GadisNeural`)
+    Menghasilkan suara narator Bahasa Indonesia jernih, luwes, & ekspresif (100% GRATIS):
+    - Prioritas 1: Microsoft Edge Neural TTS (`id-ID-ArdiNeural` atau `id-ID-GadisNeural`) dengan Dynamic Sentence Prosody & Jeda Napas Alami
     - Prioritas 2: Google Translate TTS (`gTTS` bahasa Indonesia) jika server Edge sedang sibuk
     - Prioritas 3: Tone hening berdurasi proporsional agar pipeline tidak pernah crash.
     Mengembalikan durasi audio dalam detik.
     """
     clean_text = re.sub(r"[*#_~`<>]+", " ", text)
     clean_text = re.sub(r"\s+", " ", clean_text).strip()
+    # Tambahkan intonasi & jeda napas alami sebelum kata penghubung agar suara narator luwes, hangat, dan tidak kaku
+    clean_text = re.sub(
+        r"\s+\b(namun|tetapi|sehingga|karena itu|oleh karena itu|selain itu|kemudian|tahukah kalian|mari kita)\b",
+        r", \1",
+        clean_text,
+        flags=re.IGNORECASE,
+    )
     clean_text = apply_islamic_phonetic_pronunciation(clean_text)
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", clean_text) if s.strip()]
+    if not sentences:
+        sentences = [clean_text]
 
     voice_name = "id-ID-GadisNeural" if str(voice_gender).lower() == "female" else "id-ID-ArdiNeural"
     raw_mp3 = output_mp3_path + ".raw.mp3"
@@ -982,12 +1067,19 @@ def synthesize_tts_audio(text: str, output_mp3_path: str, voice_gender: str = "m
     tts_ok = False
     for attempt in range(3):
         try:
-            asyncio.run(_edge_tts_save(clean_text, voice_name, "-2%", raw_mp3))
-            if os.path.exists(raw_mp3) and os.path.getsize(raw_mp3) > 1000:
-                tts_ok = True
+            with tempfile.TemporaryDirectory(prefix="tts_sents_", ignore_cleanup_errors=True) as tmp_sdir:
+                tts_ok = asyncio.run(_edge_tts_multi_sentences_save(sentences, voice_name, raw_mp3, tmp_sdir))
+            if tts_ok and os.path.exists(raw_mp3) and os.path.getsize(raw_mp3) > 1000:
                 break
         except Exception as e:
-            print(f"[TTS] Percobaan Edge-TTS #{attempt + 1} gagal ({e}), mencoba ulang...")
+            print(f"[TTS] Percobaan Edge-TTS Multi-Prosody #{attempt + 1} gagal ({e}), mencoba fallback blok...")
+            try:
+                asyncio.run(_edge_tts_save(clean_text, voice_name, "+1%", raw_mp3, pitch="+2Hz"))
+                if os.path.exists(raw_mp3) and os.path.getsize(raw_mp3) > 1000:
+                    tts_ok = True
+                    break
+            except Exception:
+                pass
             time.sleep(1.5)
 
     if not tts_ok:
@@ -1002,12 +1094,18 @@ def synthesize_tts_audio(text: str, output_mp3_path: str, voice_gender: str = "m
             print(f"[TTS] Fallback gTTS gagal ({e}), membuat audio cadangan...")
 
     if tts_ok:
-        # Tambahkan jeda napas halus (0.35s di awal & 0.65s di akhir scene) + normalisasi audio stereo 44.1kHz
+        # Filter audio hangat (Warm Broadcast Voice EQ + Soft Compressor + Jeda Napas Alami) agar suara tidak datar/kaku
         cmd = [
             "ffmpeg",
             "-y",
             "-i", raw_mp3,
-            "-af", "adelay=350|350,apad=pad_dur=0.65,aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo",
+            "-af", (
+                "highpass=f=75,"
+                "equalizer=f=210:width_type=o:width=1.2:g=2.0,"
+                "equalizer=f=3400:width_type=o:width=1.5:g=1.8,"
+                "acompressor=threshold=-18dB:ratio=2.2:attack=15:release=180,"
+                "adelay=320|320,apad=pad_dur=0.55,aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo"
+            ),
             "-c:a", "libmp3lame",
             "-b:a", "192k",
             output_mp3_path,
@@ -1092,37 +1190,92 @@ def _draw_vector_icon(draw: ImageDraw.ImageDraw, cx: int, cy: int, radius: int, 
 _USED_INTERNET_IMAGE_URLS: set = set()
 
 
-_MOSQUE_AND_ISLAMIC_QUERIES = [
-    "Sheikh Zayed Grand Mosque architecture dome",
-    "Al-Masjid an-Nabawi Medina mosque dome",
+_CURATED_ISLAMIC_INTERNET_QUERIES = [
+    # 1. Masjid Megah Dunia & Arsitektur Islam
+    "Al-Masjid an-Nabawi Medina mosque dome architecture",
+    "Masjid al-Haram Mecca Kaaba Islamic architecture",
+    "Sheikh Zayed Grand Mosque dome courtyard",
     "Sultan Ahmed Blue Mosque Istanbul architecture",
-    "Masjid al-Haram Mecca Islamic architecture",
-    "Putra Mosque Malaysia Islamic architecture",
-    "Umayyad Mosque Damascus courtyard",
+    # 2. Pemandangan Alam Ciptaan Allah
+    "Mount Bromo sunrise nature landscape Indonesia",
+    "Scenic mountain valley river sunrise nature landscape",
+    "Beautiful green rice terraces mountain landscape Indonesia",
+    "Peaceful ocean sunset sky clouds nature",
+    # 3. Islam di Indonesia (Masjid Nusantara & Sejarah Wali Songo)
     "Baiturrahman Grand Mosque Aceh Indonesia",
-    "Istiqlal Mosque Jakarta Islamic architecture",
-    "Hassan II Mosque Casablanca architecture",
-    "Quba Mosque Medina Islamic architecture",
-    "Great Mosque of Cordoba arches",
-    "Islamic geometric dome mosque architecture",
+    "Istiqlal Mosque Jakarta Indonesia architecture",
+    "Great Mosque of Demak Indonesia traditional Islamic architecture",
+    "Menara Kudus Mosque Indonesia heritage",
+    # 4. Kaligrafi Islami & Mushaf Al-Qur'an
+    "Islamic Arabic calligraphy art mosque",
+    "Open Quran mushaf on wooden rahal stand",
+    "Golden Bismillah Arabic Islamic calligraphy",
+    "Islamic geometric arabesque calligraphy dome",
+]
+
+# Peta Kata Kunci Topik Indonesia -> Kueri Pencarian Gambar Internet Gratis yang Sesuai Topik & Bernuansa Islami
+_TOPIC_KEYWORD_TO_ISLAMIC_SEARCH: List[Tuple[Tuple[str, ...], str]] = [
+    (("al-fil", "gajah", "abrahah", "ababil", "ka'bah", "kabah", "makkah", "mekkah"), "Masjid al-Haram Mecca Kaaba Islamic history"),
+    (("al-falaq", "subuh", "fajar", "pagi", "perlindungan"), "Dawn sunrise sky over mosque minaret landscape"),
+    (("an-nas", "manusia", "hati", "bisikan", "doa"), "Open Quran mushaf and Islamic calligraphy art"),
+    (("al-ikhlas", "tauhid", "esa", "allah", "asmaul husna", "sifat allah"), "Allah Arabic Islamic calligraphy golden dome"),
+    (("al-kafirun", "toleransi", "damai", "kerukunan", "ukhuwah"), "Baiturrahman Grand Mosque Aceh Indonesia peaceful courtyard"),
+    (("al-ma'un", "maun", "yatim", "sedekah", "infak", "zakat", "berbagi", "kikir", "dermawan"), "Islamic charity sadaqah Quran mosque courtyard"),
+    (("an-nashr", "an-nasr", "fathu makkah", "pertolongan", "kemenangan"), "Masjid al-Haram Mecca historic Islamic panorama"),
+    (("al-lahab", "abu lahab", "api", "bara", "peringatan"), "Desert sand dunes sunset Arabian peninsula landscape"),
+    (("al-humazah", "mengejek", "lisan", "ghibah", "akhlak", "adab"), "Islamic calligraphy Quran wisdom manuscript"),
+    (("al-asr", "waktu", "disiplin", "sore", "senja"), "Golden sunset horizon clouds nature landscape"),
+    (("al-qur'an", "alquran", "quran", "tajwid", "mad", "izhar", "ikhfa", "idgham", "qalqalah", "hijaiyah", "surah", "surat", "ayat", "tilawah"), "Open Quran mushaf Arabic calligraphy on wooden stand"),
+    (("hadis", "hadits", "sunnah", "rasulullah", "nabi muhammad", "madinah", "hijrah"), "Al-Masjid an-Nabawi Medina Green Dome"),
+    (("shalat", "sholat", "salat", "ruku", "sujud", "khusyu", "berjemaah", "jumat", "azan", "masjid"), "Grand Mosque prayer hall Islamic architecture"),
+    (("wudhu", "wudu", "thaharah", "taharah", "bersuci", "air", "mandi", "tayamum", "istinja"), "Mosque ablution fountain courtyard Islamic architecture"),
+    (("puasa", "ramadhan", "ramadan", "sahur", "berbuka", "idul fitri"), "Ramadan lantern crescent moon and mosque at night"),
+    (("haji", "umrah", "qurban", "kurban", "akikah", "idul adha", "ismail", "ibrahim"), "Kaaba Mecca Hajj Masjid al-Haram"),
+    (("wali songo", "walisongo", "nusantara", "indonesia", "sunan", "demak", "kudus", "aceh", "jawa"), "Great Mosque of Demak and Baiturrahman Mosque Aceh Indonesia"),
+    (("andalusia", "spanyol", "thariq", "cordoba", "alhambra", "umayyah", "abbasiyah", "usmani", "sejarah"), "Great Mosque of Cordoba and Alhambra Islamic architecture"),
+    (("pelangi", "hujan", "langit", "awan", "cahaya", "matahari"), "Rainbow over green mountains nature landscape"),
+    (("pesawat", "terbang", "burung", "angkasa", "sayap", "udara"), "Airplane flying high in blue sky clouds"),
+    (("alam", "bumi", "gunung", "laut", "hutan", "pohon", "tumbuhan", "lingkungan"), "Majestic green mountain forest river nature landscape"),
 ]
 
 
 def _extract_english_search_queries(scene: Dict[str, Any], topic_title: str) -> List[str]:
     """
-    Sesuai permintaan pengguna: HANYA menggunakan gambar Masjid Indah atau Animasi Islami
-    untuk seluruh video Google Form dan Shorts!
+    Menghasilkan kueri pencarian gambar gratis dari internet (Wikimedia Commons & Openverse CC0) yang:
+    1. HARUS SESUAI DENGAN TOPIK / BAGIAN YANG SEDANG DIBAHAS pada scene tersebut (`headline`, `chapter_title`, `narration_text`).
+    2. Dilengkapi dengan gambar Islami: Masjid / Pemandangan Alam / Islam di Indonesia / Kaligrafi Islami.
     """
     scene_num = int(scene.get("scene_number", 1))
-    idx1 = (scene_num - 1) % len(_MOSQUE_AND_ISLAMIC_QUERIES)
-    idx2 = (scene_num + 3) % len(_MOSQUE_AND_ISLAMIC_QUERIES)
-    idx3 = (scene_num + 7) % len(_MOSQUE_AND_ISLAMIC_QUERIES)
-    return [
-        _MOSQUE_AND_ISLAMIC_QUERIES[idx1],
-        _MOSQUE_AND_ISLAMIC_QUERIES[idx2],
-        _MOSQUE_AND_ISLAMIC_QUERIES[idx3],
-        "Grand Mosque Islamic dome minaret architecture",
-    ]
+    headline = str(scene.get("headline", "")).strip()
+    chapter = str(scene.get("chapter_title", "")).strip()
+    narration = str(scene.get("narration_text", "")).strip()
+    img_prompt = str(scene.get("image_prompt", "")).strip()
+
+    blob = f"{topic_title} {headline} {chapter} {narration}".lower()
+    queries: List[str] = []
+
+    # 1. Cocokkan kata kunci spesifik dari Bagian/Scene yang sedang dibahas
+    for kw_tuple, eng_q in _TOPIC_KEYWORD_TO_ISLAMIC_SEARCH:
+        if any(k in blob for k in kw_tuple):
+            if eng_q not in queries:
+                queries.append(eng_q)
+
+    # 2. Jika scene memiliki image_prompt bahasa Inggris dari AI, bersihkan & tambahkan
+    if img_prompt and _is_clean_islamic_friendly_url(img_prompt):
+        clean_p = re.sub(r"[^A-Za-z0-9\s]", " ", img_prompt)
+        words_p = [w for w in clean_p.split() if len(w) >= 3 and w.lower() not in ("3d", "pixar", "animation", "illustration", "style", "cinematic", "vibrant", "no", "text")]
+        if len(words_p) >= 3:
+            queries.append(" ".join(words_p[:6]) + " Islamic")
+
+    # 3. Sertakan kueri terkurasi: Masjid / Pemandangan Alam / Islam di Indonesia / Kaligrafi Islami
+    idx1 = (scene_num - 1) % len(_CURATED_ISLAMIC_INTERNET_QUERIES)
+    idx2 = (scene_num + 4) % len(_CURATED_ISLAMIC_INTERNET_QUERIES)
+    idx3 = (scene_num + 9) % len(_CURATED_ISLAMIC_INTERNET_QUERIES)
+    for cq in (_CURATED_ISLAMIC_INTERNET_QUERIES[idx1], _CURATED_ISLAMIC_INTERNET_QUERIES[idx2], _CURATED_ISLAMIC_INTERNET_QUERIES[idx3]):
+        if cq not in queries:
+            queries.append(cq)
+
+    return queries[:6]
 
 
 _BLOCKED_NON_ISLAMIC_IMAGE_TERMS = (
@@ -1499,11 +1652,13 @@ def fetch_or_create_scene_illustration(
     scene["motion_style"] = m_style
     style_recipe = MOTION_FORMAT_STYLES.get(m_style, MOTION_FORMAT_STYLES["isometrik-dibongkar"])
 
-    # 0. PRIORITAS #1: Ambil Ilustrasi Animasi Islami dari Koleksi PDF Buku Bergambar di Google Drive (`11ovqUixuFNcSjGHP_KIwpRRzYp1qls0s`)
-    img1_ok = _get_topic_pdf_illustration_from_drive(topic_title, scene, scene_num, work_dir, out_jpg1)
+    # 1. PRIORITAS UTAMA (Sesuai instruksi pengguna: BATALKAN pengambilan dari Drive PDF):
+    #    Ambil sendiri gambar gratis dari internet (Wikimedia Commons & Openverse CC0) yang
+    #    SESUAI DENGAN TOPIK / BAGIAN YANG SEDANG DIBAHAS, atau gambar Islami:
+    #    Masjid / Pemandangan Alam / Islam di Indonesia / Kaligrafi Islami!
+    img1_ok = False
     img2_ok = False
 
-    # 1. Lengkapi dengan Gambar Masjid / Animasi Islami Bebas Copyright (Wikimedia Commons & Openverse CC0/CC-BY)
     search_queries = _extract_english_search_queries(scene, topic_title)
     internet_urls = _search_wikimedia_and_openverse_urls(search_queries, max_results=6)
 
@@ -1512,21 +1667,28 @@ def fetch_or_create_scene_illustration(
             if _download_and_prepare_image(u, out_jpg1):
                 _USED_INTERNET_IMAGE_URLS.add(u)
                 img1_ok = True
-                print(f"  [INTERNET IMAGE #1 SCENE {scene_num:02d}] Berhasil mengambil gambar nyata sesuai topik: {u[:65]}...")
+                print(f"  [INTERNET IMAGE #1 SCENE {scene_num:02d}] Berhasil mengambil gambar internet sesuai topik/Islami: {u[:65]}...")
                 continue
         elif not img2_ok:
             if _download_and_prepare_image(u, out_jpg2):
                 _USED_INTERNET_IMAGE_URLS.add(u)
                 img2_ok = True
-                print(f"  [INTERNET IMAGE #2 SCENE {scene_num:02d}] Berhasil mengambil gambar pendamping: {u[:65]}...")
+                print(f"  [INTERNET IMAGE #2 SCENE {scene_num:02d}] Berhasil mengambil gambar pendamping Islami: {u[:65]}...")
                 break
 
-    # 2. Lengkapi dengan AI Visual Generator (Pollinations Flux/SDXL) sesuai 7 Gaya Motion Format v2
+    # 2. Lengkapi dengan AI Visual Generator (Pollinations Flux/SDXL) sesuai Topik Bagian & Nuansa Islami
+    islamic_visual_themes = [
+        "grand Islamic mosque architecture with golden dome and peaceful courtyard",
+        "breathtaking natural scenery landscape of mountains sunrise river and sky created by Allah",
+        "historic Islam in Indonesia archipelago mosque architecture such as Baiturrahman Aceh or Istiqlal or Demak",
+        "artistic golden Islamic Arabic calligraphy and open Quran mushaf on wooden rahal",
+    ]
+    chosen_islamic_theme = islamic_visual_themes[(scene_num - 1) % len(islamic_visual_themes)]
     raw_prompt = str(scene.get("image_prompt", "")).strip()
     if not raw_prompt:
-        raw_prompt = f"Educational visual explaining {headline} ({chapter}) about {topic_title}, {style_recipe}"
+        raw_prompt = f"Islamic educational visual illustrating {headline} ({chapter}) about {topic_title}, featuring {chosen_islamic_theme}, {style_recipe}"
     else:
-        raw_prompt = f"{raw_prompt}, {style_recipe}"
+        raw_prompt = f"{raw_prompt}, {chosen_islamic_theme}, {style_recipe}"
 
     seed_val = 200 + scene_num * 43
     encoded_p = urllib.parse.quote(raw_prompt[:280])
@@ -1711,18 +1873,9 @@ def render_scene_stage_image(
     header_info = f"{target_audience.upper()[:18]}  •  {chapter_title.upper()[:46]}"
     odraw.text((354, 57), header_info, font=small_font, fill=theme["accent_soft"] + (255,))
 
-    style_label_map = {
-        "isometrik-dibongkar": "GAYA: 3D ISOMETRIK",
-        "sejarah-3d": "GAYA: SEJARAH 3D",
-        "tubuh-anime": "GAYA: VISUAL ANIME",
-        "dunia-2d": "GAYA: DUNIA 2D",
-        "kartun-cel": "GAYA: KARTUN CEL",
-        "peta-relief": "GAYA: PETA RELIEF",
-        "promo-produk": "GAYA: SPOTLIGHT",
-    }
-    style_tag = style_label_map.get(m_style, "MOTION FORMAT V2")
+    style_tag = f"BAGIAN {scene_num:02d}: {chapter_title.upper()[:24]}"
     odraw.rounded_rectangle([1312, 44, 1680, 94], radius=14, fill=(4, 18, 14, 225), outline=theme["accent"] + (220,), width=2)
-    odraw.text((1334, 57), f"🎬 {style_tag}", font=small_font, fill=theme["accent"] + (255,))
+    odraw.text((1334, 57), f"📖 {style_tag[:26]}", font=small_font, fill=theme["accent"] + (255,))
 
     # 3. Ikon Vektor & Headline Utama Scene
     _draw_vector_icon(odraw, cx=126, cy=168, radius=48, icon_type=str(scene.get("icon_type", "mosque")), color=theme["accent"])
@@ -1768,11 +1921,11 @@ def render_scene_stage_image(
         # =========================================================================
         _paste_zoomed_rounded_photo(
             base, odraw, illust1_path, (620, 245, 660, 495), zf1, pan1,
-            theme["accent"] + (255,), theme["card_bg"], f"VISUAL UTAMA: {headline_text[:26]}", font_path
+            theme["accent"] + (255,), theme["card_bg"], f"📌 {headline_text[:34]}", font_path
         )
         _paste_zoomed_rounded_photo(
             base, odraw, illust2_path, (1320, 245, 525, 235), zf2, pan2,
-            (255, 255, 255, 210), theme["card_bg"], f"DOKUMENTASI TOPIK #{scene_num:02d}", font_path
+            (255, 255, 255, 210), theme["card_bg"], f"📖 {chapter_title.upper()[:34]}", font_path
         )
         card_specs = [
             (68, 250, 515, 225, (650, 360), (595, 360)),
@@ -1811,11 +1964,11 @@ def render_scene_stage_image(
         # =========================================================================
         _paste_zoomed_rounded_photo(
             base, odraw, illust1_path, (68, 238, 865, 292), zf1, pan1,
-            theme["accent"] + (255,), theme["card_bg"], f"VISUAL 01 • {headline_text[:28]}", font_path
+            theme["accent"] + (255,), theme["card_bg"], f"📌 {headline_text[:34]}", font_path
         )
         _paste_zoomed_rounded_photo(
             base, odraw, illust2_path, (975, 238, 870, 292), zf2, pan2,
-            theme["accent"] + (255,), theme["card_bg"], f"VISUAL 02 • {chapter_title.upper()[:28]}", font_path
+            theme["accent"] + (255,), theme["card_bg"], f"📖 {chapter_title.upper()[:34]}", font_path
         )
         if stage_index >= 1:
             _draw_motion_format_pointer_label(
@@ -1849,11 +2002,11 @@ def render_scene_stage_image(
         # =========================================================================
         _paste_zoomed_rounded_photo(
             base, odraw, illust1_path, (68, 245, 620, 310), zf1, pan1,
-            theme["accent"] + (255,), theme["card_bg"], f"SUMBER VISUAL • {headline_text[:24]}", font_path
+            theme["accent"] + (255,), theme["card_bg"], f"📌 {headline_text[:34]}", font_path
         )
         _paste_zoomed_rounded_photo(
             base, odraw, illust2_path, (130, 495, 558, 250), zf2, pan2,
-            (255, 255, 255, 220), theme["card_bg"], f"ILUSTRASI PENDAMPING #{scene_num:02d}", font_path
+            (255, 255, 255, 220), theme["card_bg"], f"📖 {chapter_title.upper()[:34]}", font_path
         )
         if stage_index >= 1:
             _draw_motion_format_pointer_label(
@@ -1905,11 +2058,11 @@ def render_scene_stage_image(
 
         _paste_zoomed_rounded_photo(
             base, odraw, illust1_path, (1230, 245, 615, 315), zf1, pan1,
-            theme["accent"] + (255,), theme["card_bg"], f"VISUAL UTAMA • {headline_text[:24]}", font_path
+            theme["accent"] + (255,), theme["card_bg"], f"📌 {headline_text[:34]}", font_path
         )
         _paste_zoomed_rounded_photo(
             base, odraw, illust2_path, (1295, 505, 550, 238), zf2, pan2,
-            (255, 255, 255, 220), theme["card_bg"], f"GAMBAR TOPIK #{scene_num:02d}", font_path
+            (255, 255, 255, 220), theme["card_bg"], f"📖 {chapter_title.upper()[:34]}", font_path
         )
         if stage_index >= 1:
             _draw_motion_format_pointer_label(
@@ -2439,7 +2592,17 @@ def build_complete_explainer_package(
         except Exception:
             pass
 
-    shorts_title = f"{topic_title[:68]} #Shorts | Islamic K1"
+    raw_main_title = explainer_data.get("title", f"{topic_title} | {target_audience} | Islamic K1")
+    raw_shorts_title = f"{topic_title[:68]} #Shorts | Islamic K1"
+    try:
+        from book_cover_helper import format_uniform_youtube_title
+
+        final_main_title = format_uniform_youtube_title(raw_main_title, topic_title, is_shorts=False)
+        final_shorts_title = format_uniform_youtube_title(raw_shorts_title, topic_title, is_shorts=True)
+    except Exception:
+        final_main_title = raw_main_title[:95]
+        final_shorts_title = raw_shorts_title[:98]
+
     shorts_desc = (
         f"{paragraphs[0]}\n\n"
         f"🎬 Ringkasan Cepat 60 Detik (YouTube Shorts) untuk {target_audience}.\n"
@@ -2455,9 +2618,9 @@ def build_complete_explainer_package(
         "final_duration": final_duration,
         "shorts_video_path": shorts_video_path,
         "shorts_duration": shorts_duration,
-        "shorts_title": shorts_title[:98],
+        "shorts_title": final_shorts_title[:98],
         "shorts_description": shorts_desc[:4800],
-        "title": explainer_data.get("title", f"{topic_title} | {target_audience} | Islamic K1")[:95],
+        "title": final_main_title[:100],
         "full_description": full_description,
         "tags": explainer_data.get("tags", ["Islamic K1", topic_title[:45], target_audience[:35], "Edukasi Islami"])[:15],
         "playlist_name": explainer_data.get("playlist_name", "Explainer Islami & Edukasi Keluarga Muslim"),
@@ -2567,11 +2730,12 @@ def render_vertical_shorts_video(
             od.rounded_rectangle([24, 24, W - 24, H - 24], radius=28, outline=(acc_r, acc_g, acc_b, 110), width=3)
 
             # Header 9:16 (Area kanan atas x > 860 bersih untuk Logo Islamic K1)
+            chapter_s = str(sc.get("chapter_title") or topic_title).upper().strip()
             b_font = _load_bold_font(24, font_path)
             od.rounded_rectangle([54, 72, 340, 126], radius=14, fill=theme["badge_bg"] + (255,))
-            od.text((74, 85), f"SHORTS 0{beat_num} / 04", font=b_font, fill=theme["badge_text"] + (255,))
+            od.text((74, 85), f"BAGIAN 0{beat_num} / 04", font=b_font, fill=theme["badge_text"] + (255,))
             od.rounded_rectangle([358, 72, 830, 126], radius=14, fill=(6, 24, 18, 220), outline=theme["accent"] + (220,), width=2)
-            od.text((380, 86), f"🎬 {m_style.upper()[:22]}", font=_load_bold_font(21, font_path), fill=theme["accent"] + (255,))
+            od.text((380, 86), f"📖 {chapter_s[:26]}", font=_load_bold_font(21, font_path), fill=theme["accent"] + (255,))
 
             # Judul Besar Vertikal
             h_font = _load_bold_font(44, font_path)
@@ -2586,11 +2750,11 @@ def render_vertical_shorts_video(
             zf_b = 1.18 - st_i * 0.04
             _paste_zoomed_rounded_photo(
                 base, od, img1_p, (56, 285, 968, 460), zf_a, ((st_i - 1) * 10, 0),
-                theme["accent"] + (255,), theme["card_bg"], f"VISUAL UTAMA • {headline_s[:24]}", font_path,
+                theme["accent"] + (255,), theme["card_bg"], f"📌 {headline_s[:34]}", font_path,
             )
             _paste_zoomed_rounded_photo(
                 base, od, img2_p, (580, 625, 444, 255), zf_b, (-(st_i - 1) * 8, 0),
-                (255, 255, 255, 230), theme["card_bg"], f"DOKUMENTASI #{beat_num:02d}", font_path,
+                (255, 255, 255, 230), theme["card_bg"], f"📖 {chapter_s[:30]}", font_path,
             )
             if st_i >= 1:
                 _draw_motion_format_pointer_label(
