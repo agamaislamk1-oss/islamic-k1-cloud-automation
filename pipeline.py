@@ -816,6 +816,14 @@ def is_form_request_already_uploaded(
         )
 
     norm_title = normalize_key(title)
+    for p_k, p_v in processed_forms.items():
+        if normalize_key(p_v.get("form_title", "")) == norm_title and len(norm_title) >= 4:
+            vid_id = p_v.get("youtube_video_id", "")
+            return (
+                True,
+                f"Judul Form sudah pernah dibuat & diupload sebelumnya (YouTube ID: {vid_id}) — dikunci permanen agar tidak dibuat ulang.",
+            )
+
     for yt_vid in existing_yt_videos:
         if f"[Ref:{ref_tag}]" in yt_vid.get("description", ""):
             return True, f"Kode referensi {ref_tag} sudah ada di video YouTube '{yt_vid['title']}' ({yt_vid['video_id']})."
@@ -829,9 +837,11 @@ def is_form_request_already_uploaded(
 def sync_google_form_status_to_sheet(drive, root_id: str, form_queue_id: str, history_data: Dict[str, Any]) -> None:
     """
     Menuliskan keterangan status 'SUDAH DIUPLOAD: https://youtu.be/<ID>' langsung ke dalam file Google Sheet
-    (`Form_Motion_Grafis_IslamicK1`) untuk semua baris Google Form yang sudah pernah diproses,
+    (`Form_Motion_Grafis_IslamicK1`) menggunakan modul CSV bawaan Python (tanpa ketergantungan openpyxl),
     sehingga meskipun video masih Private/Terjadwal atau sudah dihapus di YouTube, baris tersebut tetap bertanda SUDAH DIUPLOAD.
     """
+    from googleapiclient.http import MediaIoBaseUpload
+
     processed_forms = history_data.get("processed_form_requests", {})
     if not processed_forms:
         return
@@ -841,79 +851,69 @@ def sync_google_form_status_to_sheet(drive, root_id: str, form_queue_id: str, hi
         f"or '{root_id}' in parents or '{form_queue_id}' in parents)"
     )
     try:
-        import openpyxl
-
         sheet_res = drive.files().list(q=sheet_query, fields="files(id, name)", pageSize=10).execute(num_retries=3)
         for sh in sheet_res.get("files", []):
             try:
-                xlsx_bytes = (
-                    drive.files()
-                    .export(
-                        fileId=sh["id"],
-                        mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    )
-                    .execute(num_retries=3)
-                )
-                wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
-                modified = False
-                for ws in wb.worksheets:
-                    if ws.max_row <= 1:
-                        continue
-                    headers = [str(ws.cell(1, c).value or "").strip().lower() for c in range(1, ws.max_column + 1)]
-                    title_col = 2 if len(headers) >= 2 else 1
-                    aud_col = 3 if len(headers) >= 3 else -1
-                    status_col = -1
-                    for c_i, col_name in enumerate(headers, start=1):
-                        if any(k in col_name for k in ["judul", "topik", "title", "topic", "materi"]):
-                            title_col = c_i
-                        elif any(k in col_name for k in ["audience", "audiens", "target", "penonton", "sasaran", "kelas"]):
-                            aud_col = c_i
-                        elif any(k in col_name for k in ["status", "keterangan", "youtube"]):
-                            status_col = c_i
-                    if status_col == -1:
-                        status_col = ws.max_column + 1
-                        ws.cell(1, status_col, "Status YouTube (Otomatis)")
-                        modified = True
+                csv_bytes = drive.files().export(fileId=sh["id"], mimeType="text/csv").execute(num_retries=3)
+                text_csv = csv_bytes.decode("utf-8-sig", errors="replace")
+                rows = [r for r in csv.reader(io.StringIO(text_csv)) if any(str(c).strip() for c in r)]
+                if len(rows) <= 1:
+                    continue
+                headers = [str(c).strip().lower() for c in rows[0]]
+                title_idx = 1 if len(headers) > 1 else 0
+                aud_idx = 2 if len(headers) > 2 else -1
+                status_idx = -1
+                for i, col_name in enumerate(headers):
+                    if any(k in col_name for k in ["judul", "topik", "title", "topic", "materi"]):
+                        title_idx = i
+                    elif any(k in col_name for k in ["audience", "audiens", "target", "penonton", "sasaran", "kelas"]):
+                        aud_idx = i
+                    elif any(k in col_name for k in ["status", "keterangan", "youtube"]):
+                        status_idx = i
 
-                    for r_i in range(2, ws.max_row + 1):
-                        r_title = str(ws.cell(r_i, title_col).value or "").strip()
-                        if not r_title:
-                            continue
-                        r_aud = (
-                            str(ws.cell(r_i, aud_col).value or "").strip()
-                            if aud_col > 0 and str(ws.cell(r_i, aud_col).value or "").strip()
-                            else "Keluarga & Pelajar Muslim"
-                        )
-                        nk, _ = _make_form_request_id(r_title, r_aud)
-                        rec = processed_forms.get(nk)
-                        if not rec:
-                            # Coba cocokkan hanya berdasarkan judul jika audiens default
-                            for p_k, p_v in processed_forms.items():
-                                if normalize_key(p_v.get("form_title", "")) == normalize_key(r_title):
-                                    rec = p_v
-                                    break
-                        if rec:
-                            vid_id = rec.get("youtube_video_id", "")
-                            cur_st = str(ws.cell(r_i, status_col).value or "").strip()
-                            expected_st = f"SUDAH DIUPLOAD: https://youtu.be/{vid_id}"
-                            if "SUDAH" not in cur_st.upper():
-                                ws.cell(r_i, status_col, expected_st)
-                                modified = True
+                modified = False
+                if status_idx == -1:
+                    status_idx = len(rows[0])
+                    rows[0].append("Status YouTube (Otomatis)")
+                    modified = True
+
+                for r_i in range(1, len(rows)):
+                    row = rows[r_i]
+                    while len(row) <= status_idx:
+                        row.append("")
+                    r_title = str(row[title_idx]).strip() if len(row) > title_idx else ""
+                    if not r_title:
+                        continue
+                    r_aud = (
+                        str(row[aud_idx]).strip()
+                        if (aud_idx >= 0 and len(row) > aud_idx and str(row[aud_idx]).strip())
+                        else "Keluarga & Pelajar Muslim"
+                    )
+                    nk, _ = _make_form_request_id(r_title, r_aud)
+                    rec = processed_forms.get(nk)
+                    if not rec:
+                        for p_k, p_v in processed_forms.items():
+                            if normalize_key(p_v.get("form_title", "")) == normalize_key(r_title):
+                                rec = p_v
+                                break
+                    if rec:
+                        vid_id = rec.get("youtube_video_id", "")
+                        cur_st = str(row[status_idx]).strip()
+                        expected_st = f"SUDAH DIUPLOAD: https://youtu.be/{vid_id}"
+                        if "SUDAH" not in cur_st.upper():
+                            row[status_idx] = expected_st
+                            modified = True
 
                 if modified:
-                    tmp_xlsx = tempfile.mktemp(suffix=".xlsx")
-                    wb.save(tmp_xlsx)
-                    media = MediaFileUpload(
-                        tmp_xlsx,
-                        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    out_buf = io.StringIO()
+                    writer = csv.writer(out_buf)
+                    writer.writerows(rows)
+                    media = MediaIoBaseUpload(
+                        io.BytesIO(out_buf.getvalue().encode("utf-8")),
+                        mimetype="text/csv",
                         resumable=False,
                     )
                     drive.files().update(fileId=sh["id"], media_body=media).execute(num_retries=3)
-                    del media
-                    try:
-                        os.remove(tmp_xlsx)
-                    except OSError:
-                        pass
                     print(f"[GOOGLE SHEET STATUS] Kolom 'Status YouTube' di '{sh['name']}' berhasil diperbarui otomatis!")
             except Exception:
                 pass
