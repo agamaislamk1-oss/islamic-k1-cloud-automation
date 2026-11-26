@@ -23,19 +23,83 @@ from googleapiclient.http import MediaFileUpload
 DRIVE_BOOK_FOLDER_1 = "1clzgag-NRyYUhlxFEy9Pe2eX3b-Lt4ME"
 DRIVE_BOOK_FOLDER_2 = "1im355GYZfrBz9S8JuU_FHComBGGddG22"
 
-# Daftar Mapel & Normalisasi Kode Judul
+# Daftar Mapel & Normalisasi Kode Judul (Mendukung PAI/Madrasah & Seluruh Cabang Pelajaran Umum)
 SUBJECT_PATTERNS = [
-    (r"\b(?:pai|paibp|pendidikan\s+agama\s+islam)\b", "PAIBP", "Pendidikan Agama Islam dan Budi Pekerti"),
+    (r"\bpai\s*k13\b", "PAI K13", "Pendidikan Agama Islam K13"),
+    (r"\bpaibp\b", "PAIBP", "Pendidikan Agama Islam dan Budi Pekerti"),
+    (r"\b(?:pai|pendidikan\s+agama\s+islam)\b", "PAI", "Pendidikan Agama Islam dan Budi Pekerti"),
     (r"\bushul\s*fiq[ih]*\b", "Ushul Fiqh", "Ushul Fiqh"),
     (r"\bfi(?:k|q)ih\b", "Fikih", "Fikih Kemenag"),
     (r"\ba[kq]idah\s*akhlak\b", "Akidah Akhlak", "Akidah Akhlak Kemenag"),
-    (r"\b(?:al[-\s]*qur'?an\s*hadis?t?|qh)\b", "Al-Qur'an Hadis", "Al-Qur'an Hadis Kemenag"),
+    (r"\b(?:al[-\s]*qur'?an\s*hadit?s?t?|qh)\b", "Al-Quran Hadis", "Al-Qur'an Hadis Kemenag"),
     (r"\b(?:ski|sejarah\s+kebudayaan\s+islam)\b", "SKI", "Sejarah Kebudayaan Islam Kemenag"),
     (r"\bbahasa\s+arab\b", "Bahasa Arab", "Bahasa Arab Kemenag"),
     (r"\bbahasa\s+indonesia\b", "Bahasa Indonesia", "Bahasa Indonesia Kurikulum Merdeka"),
+    (r"\bbahasa\s+inggris\b", "Bahasa Inggris", "Bahasa Inggris Kurikulum Merdeka"),
     (r"\b(?:pendidikan\s+pancasila|ppkn|pkn)\b", "Pendidikan Pancasila", "Pendidikan Pancasila Kurikulum Merdeka"),
-    (r"\bipas?\b", "IPAS", "IPAS Kurikulum Merdeka"),
+    (r"\bipas\b", "IPAS", "IPAS Kurikulum Merdeka"),
+    (r"\bipa\b", "IPA", "Ilmu Pengetahuan Alam Kurikulum Merdeka"),
+    (r"\bips\b", "IPS", "Ilmu Pengetahuan Sosial Kurikulum Merdeka"),
+    (r"\b(?:matematika|mtk)\b", "Matematika", "Matematika Kurikulum Merdeka"),
+    (r"\binformatika\b", "Informatika", "Informatika Kurikulum Merdeka"),
+    (r"\b(?:pjok|penjaskes)\b", "PJOK", "PJOK Kurikulum Merdeka"),
+    (r"\bseni\s+(?:budaya|rupa|musik|teater|tari)\b", "Seni Budaya", "Seni Budaya Kurikulum Merdeka"),
+    (r"\bprakarya\b", "Prakarya", "Prakarya Kurikulum Merdeka"),
+    (r"\bfisika\b", "Fisika", "Fisika Kurikulum Merdeka"),
+    (r"\bbiologi\b", "Biologi", "Biologi Kurikulum Merdeka"),
+    (r"\bkimia\b", "Kimia", "Kimia Kurikulum Merdeka"),
+    (r"\bekonomi\b", "Ekonomi", "Ekonomi Kurikulum Merdeka"),
+    (r"\bgeografi\b", "Geografi", "Geografi Kurikulum Merdeka"),
+    (r"\bsosiologi\b", "Sosiologi", "Sosiologi Kurikulum Merdeka"),
 ]
+
+# Kamus Topik Resmi untuk File Video Pembelajaran yang Nama Filenya Hanya Berisi "<Mapel> <Kelas> Bab <N>.mp4" Tanpa Judul Bab
+KNOWN_TEXTBOOK_CHAPTER_TOPICS: Dict[Tuple[str, int, int], str] = {
+    ("Al-Quran Hadis", 12, 1): "Hidup Sederhana dan Menyantuni Duafa",
+    ("Al-Quran Hadis", 12, 2): "Sabar Menghadapi Ujian dan Cobaan",
+    ("Al-Quran Hadis", 12, 3): "Melestarikan Lingkungan Hidup",
+    ("Al-Quran Hadis", 12, 4): "Seni Dakwah Penuh Hikmah",
+    ("Al-Quran Hadis", 12, 5): "Amar Makruf Nahi Munkar",
+    ("Al-Quran Hadis", 12, 6): "Musyawarah dan Kepemimpinan Bijak dalam Islam",
+    ("Al-Quran Hadis", 12, 7): "Jujur dan Adil Itu Hebat",
+    ("SKI", 5, 1): "Upaya Nabi Muhammad Saw. dalam Membina Masyarakat Madinah",
+    ("SKI", 5, 2): "Perjanjian Hudaibiyah dan Strategi Damai Rasulullah Saw.",
+    ("SKI", 5, 3): "Jejak Dakwah dan Fathu Makkah",
+    ("SKI", 5, 4): "Pembersihan Ka'bah dan Fathu Makkah",
+    ("SKI", 5, 5): "Pesan Terakhir Rasulullah Saw. di Haji Wada",
+    ("SKI", 5, 6): "Kisah Teladan Khalifah Abu Bakar Ash-Shiddiq",
+    ("SKI", 5, 7): "Kisah Teladan Khalifah Umar bin Khattab",
+    ("SKI", 5, 8): "Kisah Teladan Khalifah Utsman bin Affan",
+    ("SKI", 5, 9): "Kisah Teladan Khalifah Ali bin Abi Thalib",
+}
+
+# Kamus Pelengkap Judul Fashal/Bab Kajian Kitab yang Terpotong di Nama File Asli
+KNOWN_KITAB_FASHAL_COMPLETIONS: Dict[Tuple[str, int], Tuple[str, str]] = {
+    ("bidayatul hidayah", 1): ("Muqaddimah", "Basmalah & Hamdalah"),
+    ("bidayatul hidayah", 2): ("Muqaddimah", "Bahaya Niat Duniawi"),
+    ("bidayatul hidayah", 3): ("Muqaddimah", "Keutamaan Menuntut Ilmu"),
+    ("bidayatul hidayah", 4): ("Muqaddimah", "Tipu Daya Setan"),
+    ("bidayatul hidayah", 5): ("Muqaddimah", "Tiga Golongan Penuntut Ilmu"),
+    ("bidayatul hidayah", 6): ("Muqaddimah", "Permulaan Hidayah & Takwa"),
+    ("bidayatul hidayah", 7): ("Adab Ketaatan", "Muraqabah Allah Swt"),
+    ("bidayatul hidayah", 8): ("Adab Ketaatan", "Adab Bangun Tidur"),
+    ("fathul qarib", 1): ("Muqaddimah", "Basmalah"),
+    ("fathul qarib", 2): ("Muqaddimah", "Hamdalah"),
+    ("fathul qarib", 3): ("Muqaddimah", "Shalawat"),
+    ("fathul qarib", 4): ("Muqaddimah", "Tujuan Penulisan Kitab"),
+    ("fathul qarib", 5): ("Muqaddimah", "Pembuka Kitab"),
+    ("fathul qarib", 6): ("Muqaddimah", "Latar Belakang Kitab"),
+    ("fathul qarib", 7): ("Muqaddimah", "Penutup Muqaddimah"),
+    ("ahkamith thaharah", 8): ("Macam-Macam Air", ""),
+    ("ahkamith thaharah", 9): ("Benda Bernajis", ""),
+    ("ahkamith thaharah", 10): ("Bejana dan Peralatan", ""),
+    ("ahkamith thaharah", 11): ("Bersiwak", "Hukum & Tata Cara Siwak"),
+    ("ahkamith thaharah", 12): ("Wudhu", "Fardhu Wudhu"),
+    ("ahkamith thaharah", 13): ("Wudhu", "Sunnah Wudhu"),
+    ("ahkamith thaharah", 14): ("Istinja", "Adab & Tata Cara Istinja"),
+    ("ahkamith thaharah", 15): ("Pembatal Wudhu", ""),
+    ("ahkamith thaharah", 16): ("Mandi Wajib", "Hal yang Mewajibkan Mandi"),
+}
 
 # Peta File ID PDF Buku Utuh yang sudah ada di Google Drive User (Halaman 1 = Cover Buku Resmi)
 KNOWN_FULL_BOOK_PDF_IDS: Dict[Tuple[str, int], str] = {
@@ -144,20 +208,527 @@ KNOWN_FULL_BOOK_PDF_IDS: Dict[Tuple[str, int], str] = {
 }
 
 
-def parse_textbook_metadata(filename: str) -> Dict[str, Any]:
+def parse_kitab_metadata(filename: str, raw_title: str = "") -> Optional[Dict[str, Any]]:
     """
-    Mengekstrak informasi Mata Pelajaran, Kelas, Bab, Topik Bersih, dan Akhiran Judul Seragam
-    dari nama file video.
-    Contoh:
-    - "PAI 6 Bab 9. Panduan Puasa Sunah dalam Islam.mp4"
-      -> subject_code: "PAIBP", kelas: 6, bab: 9,
-         suffix: "I PAIBP 6 I Bab 9",
-         topic: "Panduan Puasa Sunah dalam Islam"
-    - "Fikih 5 Bab 1. Makanan Halal.mp4"
-      -> subject_code: "Fikih", kelas: 5, bab: 1,
-         suffix: "I Fikih 5 I Bab 1"
+    Mendeteksi dan mengekstrak struktur Kajian Kitab Islami dari nama file atau judul:
+    Format standar yang diminta:
+    `Bagian Ke (N) - Kitab (X), Bab (Y) - Fashal (Z)` (atau menyesuaikan jika tanpa Fashal / memakai Hadits/Pasal/Maqolah).
+    Mendukung berbagai kitab Islami (Bidayatul Hidayah, Fathul Qarib, Ahkamith Thaharah, Riyadhus Shalihin,
+    Safinatun Najah, Ta'limul Muta'allim, Al-Hikam, Nashoihul Ibad, Bulughul Maram, Fathul Mu'in, dll.).
     """
     base = os.path.splitext(filename)[0].strip()
+    # Hapus akhiran (1), (2), copy
+    base = re.sub(r"\s*\(\d+\)\s*$", "", base).strip()
+    # Ubah underscore menjadi spasi namun pertahankan pemisah tanda hubung " - "
+    base_clean = base.replace("_-_", " - ").replace("_", " ")
+    base_clean = re.sub(r"\s+", " ", base_clean).strip()
+
+    combined_probe = f"{base_clean} {raw_title}".lower()
+    # Pastikan ini memang video Kajian Kitab (bukan buku paket sekolah PAI/SD/SMP/SMA tentang "Iman kepada Kitab-Kitab Allah")
+    if "kitab-kitab allah" in combined_probe or "kitab suci" in combined_probe or "beriman kepada kitab" in combined_probe:
+        return None
+
+    has_kitab_keyword = bool(
+        re.search(
+            r"\b(?:kitab|syarah|bidayatul\s+hidayah|fathul\s+q[ao]rib|ahkamith\s+thaharah|tafsir\s+al[-\s]*munir|mawlid|maulid|barzanji|ja[uw]haratut\s+tauhid|mukhtarul\s+ahadit?s|sh?afwatuz\s+zubad|riyadh?us\s+shalihin|safinatun\s+najah|ta'?lim(?:ul)?\s+muta'?allim|bulughul\s+maram|nashoihul\s+ibad|al[-\s]*hikam|fathul\s+mu'?in|arbain\s+nawawi)\b",
+            combined_probe,
+            flags=re.IGNORECASE,
+        )
+    )
+    if not has_kitab_keyword:
+        return None
+
+    # Jangan tangkap jika merupakan buku pelajaran madrasah berkelas (misal PAIBP 8, Akidah Akhlak 3, Al-Qur'an Hadis 10)
+    if re.search(
+        r"\b(?:pai|paibp|fikih|fiqih|akidah\s*akhlak|al[-\s]*qur'?an\s*hadit?s?t?|ski|bahasa\s+arab|ipas?|matematika)\s*(?:k13\s*)?\d{1,2}\b",
+        base_clean,
+        flags=re.IGNORECASE,
+    ):
+        return None
+
+    # 1. Ekstrak nomor Bagian
+    bagian_num: Optional[int] = None
+    m_bag = re.search(r"\b(?:bagian|part|episode|ep|kajian)\s*(?:ke[-\s]*)?(\d{1,3})\b", base_clean, flags=re.IGNORECASE)
+    if m_bag:
+        bagian_num = int(m_bag.group(1))
+
+    # 2. Ekstrak nama Kitab
+    kitab_name = ""
+    m_kitab = re.search(
+        r"\bkitab\s+([A-Za-z0-9\s'’\-]+?)(?=\s*[-,:]?\s*\b(?:bab|fash?al|fasal|hadit?s|pasal|maqolah|hikmah|bagian|bait|nadzom)\b|$)",
+        base_clean,
+        flags=re.IGNORECASE,
+    )
+    if m_kitab:
+        kitab_name = m_kitab.group(1).strip(" -,:.")
+    else:
+        for known_k in [
+            "Bidayatul Hidayah",
+            "Fathul Qarib",
+            "Ahkamith Thaharah",
+            "Tafsir Al-Munir",
+            "Mawlid Al-Barzanji",
+            "Jauharatut Tauhid",
+            "Mukhtarul Ahadits",
+            "Shafwatuz Zubad",
+            "Riyadhus Shalihin",
+            "Safinatun Najah",
+            "Ta'limul Muta'allim",
+            "Bulughul Maram",
+            "Nashoihul Ibad",
+            "Al-Hikam",
+            "Fathul Mu'in",
+            "Arba'in Nawawi",
+        ]:
+            if known_k.lower() in combined_probe:
+                kitab_name = known_k
+                break
+
+    if not kitab_name:
+        return None
+
+    # Normalisasi kapitalisasi nama Kitab
+    kitab_title = kitab_name.title().replace("Al-", "Al-").replace("Qorib", "Qarib")
+    kitab_key = kitab_title.lower()
+
+    # 3. Ekstrak Bab dan Fashal / Sub-bagian
+    bab_name = ""
+    fashal_label = "Fashal"
+    fashal_name = ""
+
+    m_bab = re.search(
+        r"\bbab\s+([A-Za-z0-9\s'’\-]+?)(?=\s*[-,:]?\s*\b(?:fash?al|fasal|hadit?s|pasal|maqolah|hikmah)\b|$)",
+        base_clean,
+        flags=re.IGNORECASE,
+    )
+    if m_bab:
+        bab_name = m_bab.group(1).strip(" -,:.")
+
+    m_fashal = re.search(
+        r"\b(fash?al|fasal|hadit?s|pasal|maqolah|hikmah)\b\s*[:\-]?\s*(.*)$",
+        base_clean,
+        flags=re.IGNORECASE,
+    )
+    if m_fashal:
+        raw_lbl = m_fashal.group(1).strip().lower()
+        if raw_lbl.startswith("had"):
+            fashal_label = "Hadits"
+        elif raw_lbl.startswith("pas"):
+            fashal_label = "Pasal"
+        elif raw_lbl.startswith("maq"):
+            fashal_label = "Maqolah"
+        elif raw_lbl.startswith("hik"):
+            fashal_label = "Hikmah"
+        else:
+            fashal_label = "Fashal"
+        fashal_name = m_fashal.group(2).strip(" -,:.")
+
+    # 4. Cek di kamus pelengkap jika Bab / Fashal di nama file terpotong (misal "Fashal_Ba", "Fashal_Ke", dll.)
+    if bagian_num and (kitab_key, bagian_num) in KNOWN_KITAB_FASHAL_COMPLETIONS:
+        known_bab, known_fashal = KNOWN_KITAB_FASHAL_COMPLETIONS[(kitab_key, bagian_num)]
+        if known_bab:
+            bab_name = known_bab
+        if known_fashal:
+            fashal_name = known_fashal
+        elif not known_fashal:
+            fashal_name = ""
+            m_fashal = None
+
+    # Jika untuk kitab baru di masa depan kata terakhir Fashal kosong atau terpotong (<= 3 huruf), lengkapi dari raw_title AI
+    if m_fashal and (not fashal_name or len(fashal_name.split()[-1]) <= 2):
+        cleaned_ai = re.sub(r"\s*#shorts\b.*$", "", raw_title, flags=re.IGNORECASE)
+        cleaned_ai = re.sub(r"\s*[\|I]\s*.*$", "", cleaned_ai).strip()
+        cleaned_ai = re.sub(
+            rf"(?i)^.*?(?:{re.escape(kitab_title)}|muqaddimah|mukaddimah)\s*[:\-–,]?\s*",
+            "",
+            cleaned_ai,
+        ).strip()
+        if cleaned_ai and len(cleaned_ai) >= 5 and "bagian " not in cleaned_ai.lower():
+            fashal_name = cleaned_ai[:45].strip(" -,:.")
+
+    return {
+        "bagian": bagian_num,
+        "kitab": kitab_title,
+        "bab": bab_name,
+        "fashal_label": fashal_label,
+        "fashal": fashal_name,
+        "has_fashal": bool(fashal_name),
+    }
+
+
+# Kamus Pelengkap Nama File Asli yang Terpotong pada 24 Upload Awal (384..418)
+EARLY_TRUNCATED_KITAB_TITLES: Dict[Tuple[str, int], str] = {
+    ("bidayatul hidayah", 1): "Bagian 1, Kitab Bidayatul Hidayah, Bab Muqaddimah, Fashal Basmalah & Hamdalah",
+    ("bidayatul hidayah", 2): "Bagian 2, Kitab Bidayatul Hidayah, Bab Muqaddimah, Fashal Bahaya Niat Duniawi",
+    ("bidayatul hidayah", 3): "Bagian 3, Kitab Bidayatul Hidayah, Bab Muqaddimah, Fashal Keutamaan Menuntut Ilmu",
+    ("bidayatul hidayah", 4): "Bagian 4, Kitab Bidayatul Hidayah, Bab Muqaddimah, Fashal Tipu Daya Setan",
+    ("bidayatul hidayah", 6): "Bagian 6, Kitab Bidayatul Hidayah, Bab Muqaddimah, Fashal Permulaan Hidayah & Takwa",
+    ("bidayatul hidayah", 7): "Bagian 7, Kitab Bidayatul Hidayah, Bab Adab Melaksanakan Ketaatan, Fashal Muraqabah Allah Swt",
+    ("bidayatul hidayah", 8): "Bagian 8, Kitab Bidayatul Hidayah, Bab Adab Melaksanakan Ketaatan, Fashal Adab Bangun Tidur",
+    ("fathul qarib", 1): "Bagian 1, Kitab Fathul Qarib, Bab Muqaddimah, Fashal Basmalah",
+    ("fathul qarib", 2): "Bagian 2, Kitab Fathul Qarib, Bab Muqaddimah, Fashal Hamdalah",
+    ("fathul qarib", 3): "Bagian 3, Kitab Fathul Qarib, Bab Muqaddimah, Fashal Shalawat",
+    ("fathul qarib", 4): "Bagian 4, Kitab Fathul Qarib, Bab Muqaddimah, Fashal Tujuan Penulisan Kitab",
+    ("fathul qarib", 5): "Bagian 5, Kitab Fathul Qarib, Bab Muqaddimah, Fashal Pembuka Kitab",
+    ("fathul qarib", 6): "Bagian 6, Kitab Fathul Qarib, Bab Muqaddimah, Fashal Latar Belakang Kitab",
+    ("fathul qarib", 7): "Bagian 7, Kitab Fathul Qarib, Bab Muqaddimah, Fashal Penutup Muqaddimah",
+    ("ahkamith thaharah", 8): "Bagian 8, Kitab Fathul Qarib, Bab Thaharah, Fashal Macam-Macam Air",
+    ("ahkamith thaharah", 9): "Bagian 9, Kitab Fathul Qarib, Bab Thaharah, Fashal Benda Bernajis",
+    ("ahkamith thaharah", 10): "Bagian 10, Kitab Fathul Qarib, Bab Thaharah, Fashal Bejana dan Peralatan",
+    ("ahkamith thaharah", 11): "Bagian 11, Kitab Fathul Qarib, Bab Thaharah, Fashal Hukum & Tata Cara Siwak",
+    ("ahkamith thaharah", 12): "Bagian 12, Kitab Fathul Qarib, Bab Thaharah, Fashal Fardhu Wudhu",
+    ("ahkamith thaharah", 13): "Bagian 13, Kitab Fathul Qarib, Bab Thaharah, Fashal Sunnah Wudhu",
+    ("ahkamith thaharah", 14): "Bagian 14, Kitab Fathul Qarib, Bab Thaharah, Fashal Adab & Tata Cara Istinja",
+    ("ahkamith thaharah", 15): "Bagian 15, Kitab Fathul Qarib, Bab Thaharah, Fashal Pembatal Wudhu",
+    ("ahkamith thaharah", 16): "Bagian 16, Kitab Fathul Qarib, Bab Thaharah, Fashal Perkara yang Mewajibkan Mandi",
+}
+
+
+def is_already_valid_kitab_title(title: str) -> bool:
+    """
+    Mengecek apakah judul di YouTube SUDAH diubah manual oleh pengguna (atau sudah sesuai aturan penamaan kitab):
+    - Diawali dengan 'Bagian <Angka>' atau 'Bagian Ke <Angka>'
+    - Mengandung kata 'Kitab '
+    - Tidak mengandung sisa nama file mentah seperti '(1)', '(2)', '| Kajian & Materi'
+    - Tidak berakhir dengan kata terpotong ('Fashal Ba', 'Fashal Ke', 'Fashal Ti', 'Fashal Pe', '- Fashal', 'Melaksanakan Keta')
+    Jika sudah sesuai, sistem TIDAK AKAN mengubahnya lagi!
+    """
+    t = re.sub(r"\s*#shorts\b.*$", "", (title or "").strip(), flags=re.IGNORECASE).strip()
+    if not re.match(r"^Bagian\s+(?:Ke[-\s]*)?\d{1,3}\b", t, flags=re.IGNORECASE):
+        return False
+    if "kitab " not in t.lower():
+        return False
+    if re.search(r"\(\d+\)|\|\s*Kajian\s*&\s*Materi", t, flags=re.IGNORECASE):
+        return False
+    if re.search(
+        r"(?:Fashal\s+(?:Ba|Ke|Ti|Pe|Tujuan|Pembuka|Penutup)|Melaksanakan(?:\s+Keta)?|[-,]\s*Fashal)\s*$",
+        t,
+        flags=re.IGNORECASE,
+    ):
+        return False
+    return True
+
+
+def format_kitab_youtube_title(raw_title: str, filename: str, is_shorts: bool = False) -> Optional[str]:
+    """
+    Menyusun Judul Video Kajian Kitab sesuai instruksi pengguna:
+    1. Jika judul saat ini (`raw_title`) sudah diubah pengguna dan sesuai aturan (`Bagian ... Kitab ...`),
+       JANGAN diubah lagi!
+    2. Jika belum sesuai, gunakan PERSIS nama file yang diupload (`filename`) tanpa diubah oleh AI
+       (hanya membersihkan ekstensi file, angka duplikat `(1)`/`(2)`, serta melengkapi 24 file awal yang namanya sempat terpotong).
+    """
+    kmeta = parse_kitab_metadata(filename, raw_title)
+    if not kmeta:
+        return None
+
+    # 1. Jika judul sudah diubah oleh pengguna dan sudah sesuai aturan, jangan diubah lagi!
+    if is_already_valid_kitab_title(raw_title):
+        clean_existing = raw_title.strip()
+        if (is_shorts or "#shorts" in raw_title.lower()) and "#shorts" not in clean_existing.lower():
+            max_len = 91
+            if len(clean_existing) > max_len:
+                clean_existing = clean_existing[:max_len].rsplit(" ", 1)[0].rstrip(",-:")
+            return f"{clean_existing} #Shorts"
+        return clean_existing[:100]
+
+    # 2. Gunakan nama file yang diupload pengguna apa adanya
+    base = os.path.splitext(filename)[0].strip()
+    base = re.sub(r"\s*\(\d+\)\s*$", "", base).strip()
+    base_clean = base.replace("_-_", " - ").replace("__", " ").replace("_", " ")
+    base_clean = re.sub(r"\s+", " ", base_clean).strip(" -.")
+
+    kitab_key = str(kmeta.get("kitab", "")).lower()
+    bagian_num = kmeta.get("bagian")
+
+    # Cek apakah merupakan salah satu dari 24 file upload awal yang nama filenya memakai underscore & terpotong (atau Ahkamith Thaharah)
+    is_early_truncated = (
+        "_" in base
+        or "ahkamith thaharah" in base_clean.lower()
+        or re.search(r"(?:Fashal\s+(?:Ba|Ke|Ti|Pe)|Melaksanakan(?:\s+Keta)?|[-,]\s*Fashal)\s*$", base_clean, flags=re.IGNORECASE)
+    )
+    if is_early_truncated and bagian_num and (kitab_key, bagian_num) in EARLY_TRUNCATED_KITAB_TITLES:
+        full_kitab_title = EARLY_TRUNCATED_KITAB_TITLES[(kitab_key, bagian_num)]
+    else:
+        full_kitab_title = base_clean
+
+    max_allowed = 91 if (is_shorts or "#shorts" in raw_title.lower()) else 100
+
+    # Jika nama file sedikit melebihi batas 100 karakter YouTube (misal 101-112 karakter),
+    # padatkan pemisah " - " menjadi ", " dan " dan " menjadi " & " agar kalimat tetap 100% UTUH tanpa terpotong!
+    if len(full_kitab_title) > max_allowed:
+        compact_try = full_kitab_title.replace(" - ", ", ")
+        if len(compact_try) > max_allowed:
+            compact_try = re.sub(r"\s+dan\s+", " & ", compact_try, flags=re.IGNORECASE)
+        full_kitab_title = compact_try
+
+    if len(full_kitab_title) > max_allowed:
+        # Pertahankan keterangan "(Bait ...)" atau "Bagian 1/2" jika ada di ujung
+        m_tail_bait = re.search(r"(\((?:Bait|Hadits)\s*[\d\-–]+\))\s*$", full_kitab_title, flags=re.IGNORECASE)
+        m_tail_bag = re.search(r"\b(Bagian\s+\d+)\s*\([^)]*\)\s*$", full_kitab_title, flags=re.IGNORECASE)
+        if m_tail_bag:
+            prefix_part = full_kitab_title[: m_tail_bag.start()].strip(" ,-:")
+            candidate_bag = f"{prefix_part} {m_tail_bag.group(1)}"
+            if len(candidate_bag) <= max_allowed:
+                full_kitab_title = candidate_bag
+        elif m_tail_bait:
+            bait_str = m_tail_bait.group(1)
+            avail = max_allowed - len(bait_str) - 1
+            head_cut = full_kitab_title[:avail].rsplit(" ", 1)[0].rstrip(" ,-:(")
+            while re.search(
+                r"\s+(?:dan|&|dengan|setiap|dua|dari|untuk|yang|di|ke|pada|dalam|atau|serta|bagi|wa|min)\s*$",
+                head_cut,
+                flags=re.IGNORECASE,
+            ):
+                head_cut = head_cut.rsplit(" ", 1)[0].rstrip(" ,-:(")
+            full_kitab_title = f"{head_cut} {bait_str}"
+
+    if len(full_kitab_title) > max_allowed:
+        full_kitab_title = full_kitab_title[:max_allowed].rsplit(" ", 1)[0].rstrip(" ,-:(")
+        # Jangan pernah biarkan judul berakhir dengan kata sambung menggantung ("dan", "&", "dengan", "wa", "min", dll.)
+        while re.search(
+            r"\s+(?:dan|&|dengan|setiap|dua|wa|min|dari|untuk|yang|di|ke|pada|dalam|atau|serta|bagi|bagian|tamma|aradallahu|zhahara|baraza|indallahi)\s*$",
+            full_kitab_title,
+            flags=re.IGNORECASE,
+        ):
+            full_kitab_title = full_kitab_title.rsplit(" ", 1)[0].rstrip(" ,-:(")
+
+    if is_shorts or "#shorts" in raw_title.lower():
+        return f"{full_kitab_title} #Shorts"
+    return full_kitab_title
+
+
+def determine_kitab_schedule_weekday(filename: str, raw_title: str = "") -> Optional[Tuple[int, str, Optional[int]]]:
+    """
+    Menentukan hari tayang mingguan khusus (pukul 18.30 WIB) untuk Seri Kajian Kitab:
+    - Senin (weekday=0, 18.30 WIB)  : Kitab Bidayatul Hidayah / Tasawuf / Akhlak / Adab
+    - Selasa (weekday=1, 18.30 WIB) : Kitab Fathul Qarib / Ahkamith Thaharah / Fikih
+    - Rabu (weekday=2, 18.30 WIB)   : Kitab Tafsir al-Munir / Al-Qur'an / Tafsir
+    - Kamis (weekday=3, 18.30 WIB)  : Kitab Mawlid al-Barzanji / Sirah / Sejarah / Maulid
+    - Jum'at (weekday=4, 18.30 WIB) : Kitab Jauharatut Tauhid / Tauhid / Aqidah
+    Mengembalikan tuple (weekday_int_0_to_4, slot_key_str, bagian_num) atau None jika bukan video Kajian Kitab.
+    """
+    kmeta = parse_kitab_metadata(filename, raw_title)
+    if not kmeta:
+        return None
+
+    kitab_low = str(kmeta.get("kitab", "")).lower()
+    bab_low = str(kmeta.get("bab", "")).lower()
+    fashal_low = str(kmeta.get("fashal", "")).lower()
+    bagian_num = kmeta.get("bagian")
+    blob = f"{filename} {raw_title} {kitab_low} {bab_low} {fashal_low}".lower()
+
+    # 1. Senin (0): Kitab Bidayatul Hidayah / Tasawuf / Akhlak / Adab
+    if any(
+        k in blob
+        for k in (
+            "bidayatul hidayah",
+            "tasawuf",
+            "tasawwuf",
+            "ta'lim",
+            "talim",
+            "muta'allim",
+            "mutaallim",
+            "al-hikam",
+            "nashoihul ibad",
+            "minhajul abidin",
+            "ihya",
+            "riyadhus shalihin",
+            "riyadus shalihin",
+            "akhlaq",
+            "washoya",
+        )
+    ):
+        return (0, "SENIN_TASAWUF_AKHLak", bagian_num)
+
+    # 2. Selasa (1): Kitab Fathul Qarib / Ahkamith Thaharah / Shafwatuz Zubad / Fikih
+    if any(
+        k in blob
+        for k in (
+            "fathul qarib",
+            "fathul qorib",
+            "ahkamith thaharah",
+            "shafwatuz zubad",
+            "safwatuz zubad",
+            "zubad",
+            "safinatun najah",
+            "fathul mu'in",
+            "fathul muin",
+            "taqrib",
+            "abu syuja",
+            "sulamut taufiq",
+            "bulughul maram",
+            "kifayatul akhyar",
+            "mabadi",
+            "fikih",
+            "fiqih",
+            "thaharah",
+            "wudhu",
+            "shalat",
+            "zakat",
+        )
+    ):
+        return (1, "SELASA_FIKIH", bagian_num)
+
+    # 3. Rabu (2): Kitab Tafsir al-Munir / tentang Al-Qur'an
+    if any(
+        k in blob
+        for k in (
+            "tafsir al-munir",
+            "tafsir munir",
+            "al-munir",
+            "tafsir",
+            "jalalain",
+            "ibnu katsir",
+            "at-tibyan",
+            "tuhfatul athfal",
+            "jazariyah",
+            "ulumul qur",
+            "al-qur'an",
+            "al-quran",
+            "alquran",
+        )
+    ):
+        return (2, "RABU_TAFSIR_QURAN", bagian_num)
+
+    # 4. Kamis (3): Kitab Mawlid al-Barzanji / tentang Sirah / Sejarah
+    if any(
+        k in blob
+        for k in (
+            "barzanji",
+            "al-barzanji",
+            "mawlid",
+            "maulid",
+            "sirah",
+            "sejarah",
+            "nurul yaqin",
+            "khulashoh",
+            "diba",
+            "simthud durar",
+            "burdah",
+            "syamail",
+            "rahiqul makhtum",
+            "tarikh",
+        )
+    ):
+        return (3, "KAMIS_SIRAH_SEJARAH", bagian_num)
+
+    # 5. Jum'at (4): Kitab Jauharatut Tauhid / tentang Tauhid / Aqidah
+    if any(
+        k in blob
+        for k in (
+            "jauharatut tauhid",
+            "jawharatut tauhid",
+            "jauharah tauhid",
+            "tauhid",
+            "aqidah",
+            "akidah",
+            "aqidatul awam",
+            "kifayatul awam",
+            "tijan",
+            "sanusiyah",
+            "ummul barahin",
+            "qathrul ghaits",
+        )
+    ):
+        return (4, "JUMAT_TAUHID_AQIDAH", bagian_num)
+
+    # 6. Sabtu (5): Kitab Mukhtarul Ahadits / Hadits Pilihan
+    if any(
+        k in blob
+        for k in (
+            "mukhtarul ahadits",
+            "mukhtarul ahadis",
+            "arbain nawawi",
+            "arba'in nawawi",
+        )
+    ):
+        return (5, "SABTU_HADITS", bagian_num)
+
+    # Default untuk kajian kitab adab/umum lainnya -> Senin 18.30 WIB
+    return (0, "SENIN_TASAWUF_AKHLak", bagian_num)
+
+
+def parse_muawiyah_episode(filename: str, raw_title: str = "") -> Optional[int]:
+    """
+    Mendeteksi apakah video merupakan bagian dari Seri 'Muawiyah Ibn Abi Sufyan'
+    dan mengekstrak nomor episode/bagiannya (1 s/d 30) agar dapat dijadwalkan
+    secara berurutan setiap hari selama bulan Ramadhan pukul 05.30 WIB.
+    Contoh yang didukung:
+    - 'Muawiyah S01E01.mp4' -> 1
+    - 'Muawiyah S01E14.mp4' -> 14
+    - 'Muawiyah Ibn Abi Sufyan 08.mp4' -> 8
+    - 'Muawiyah ibn Abi Sufyan 12.mp4' -> 12
+    """
+    base = os.path.splitext(filename)[0].strip()
+    base = re.sub(r"\s*\(\d+\)\s*$", "", base).strip()
+    probe = f"{base} {raw_title}".lower()
+    if "muawiyah" not in probe and "mu'awiyah" not in probe:
+        return None
+    # Pastikan bukan buku paket sekolah berkelas (misal SKI Kelas 7 Bab ...)
+    if re.search(r"\b(?:ski|pai|paibp|fikih|akidah|al-qur'?an)\s*(?:kelas\s*)?\d{1,2}\b.*?\bbab\s*\d{1,2}\b", probe):
+        return None
+
+    # 1. Pola S01E01 / S1E14
+    m_se = re.search(r"\bs\d{1,2}\s*e(\d{1,2})\b", probe, flags=re.IGNORECASE)
+    if m_se:
+        return max(1, min(30, int(m_se.group(1))))
+
+    # 2. Pola angka setelah nama Muawiyah / Abi Sufyan di nama file
+    m_fn = re.search(
+        r"(?:mu'?awiyah(?:\s+(?:ibn|bin)\s+abi\s+sufyan)?)\s*(?:bagian|part|episode|ep|seri|ke)?\s*[-_:\s]*(\d{1,2})\b",
+        base,
+        flags=re.IGNORECASE,
+    )
+    if m_fn:
+        return max(1, min(30, int(m_fn.group(1))))
+
+    # 3. Pola Episode / Bagian / Part di judul
+    m_ep = re.search(r"\b(?:episode|ep|bagian|part)\s*(?:ke[-\s]*)?(\d{1,2})\b", probe, flags=re.IGNORECASE)
+    if m_ep:
+        return max(1, min(30, int(m_ep.group(1))))
+
+    return 1
+
+
+
+def _clean_special_underscore_tokens(text: str) -> str:
+    """Membersihkan urutan underscore khusus dari nama file agar kembali menjadi tanda baca & apostrof Islami yang rapi."""
+    s = text
+    s = s.replace("___", " & ")
+    s = re.sub(r"(?i)\bAl-Qur_an\b", "Al-Qur'an", s)
+    s = re.sub(r"(?i)\bAl-_Alaq\b", "Al-'Alaq", s)
+    s = re.sub(r"(?i)\bAl-_A[şs]r\b", "Al-'Asr", s)
+    s = re.sub(r"(?i)\bAl-_Adiyat\b", "Al-'Adiyat", s)
+    s = re.sub(r"(?i)\bAl-Ma_un\b", "Al-Ma'un", s)
+    s = re.sub(r"(?i)\bAl-Qari_ah\b", "Al-Qari'ah", s)
+    s = re.sub(r"(?i)\bAl-Mu_min\b", "Al-Mu'min", s)
+    s = re.sub(r"(?i)\bAl-Asma_Al-Husna\b", "Al-Asma' Al-Husna", s)
+    s = re.sub(r"(?i)\bWadi_ah\b", "Wadi'ah", s)
+    s = re.sub(r"(?i)\bIsra__Mikraj\b", "Isra' Mi'raj", s)
+    s = re.sub(r"(?i)\bIzh[aā]r_dan_Ikhf[aā]_\b", "Izhar dan Ikhfa'", s)
+    s = re.sub(r"(?i)\bIdg[aā]m\b", "Idgham", s)
+    s = re.sub(r"(?i)\bIql[aā]b\b", "Iqlab", s)
+    s = re.sub(r"(?i)\bSwt_\b", "Swt.", s)
+    s = s.replace("__", ": ")
+    s = re.sub(r"_+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip(" -_.")
+    return s
+
+
+def parse_textbook_metadata(filename: str) -> Dict[str, Any]:
+    """
+    Mengekstrak informasi Mata Pelajaran, Kelas, Jenjang (Madrasah Ibtidaiyah / Madrasah Tsanawiyah / Madrasah Aliyah / Kelas X),
+    Bab, Topik Bersih dari nama file saat diupload, dan Akhiran Judul Seragam.
+    Contoh sesuai instruksi pengguna:
+    - "Al-Quran Hadis 12 MA Bab 7. Jujur dan Adil Itu Hebat.mp4"
+      -> clean_topic: "Jujur dan Adil Itu Hebat",
+         uniform_suffix: "I Al-Quran Hadis 12 Madrasah Aliyah I Bab 7"
+    - "PAI K13 1 Bab 2. Aku Cinta Al-Qur'an.mp4"
+      -> clean_topic: "Aku Cinta Al-Qur'an",
+         uniform_suffix: "I PAI K13 Kelas 1 I Bab 2"
+    """
+    raw_base = os.path.splitext(filename)[0].strip()
+    base = _clean_special_underscore_tokens(raw_base)
 
     subject_code = None
     subject_full = None
@@ -167,12 +738,11 @@ def parse_textbook_metadata(filename: str) -> Dict[str, Any]:
             subject_full = full_name
             break
 
-    # Cari pola "<Mapel> <Kelas> ... Bab <Bab>"
     kelas_num: Optional[int] = None
     bab_num: Optional[int] = None
 
     m_kb = re.search(
-        r"(?:kelas|kls|pai|paibp|fikih|fiqih|ushul\s*fiq[ih]*|akidah\s*akhlak|al[-\s]*qur'?an\s*hadis?t?|ski|bahasa\s+arab|bahasa\s+indonesia|pendidikan\s+pancasila|ipas?)\s*(\d{1,2})\b.*?\bbab\s*(\d{1,2})\b",
+        r"(?:kelas|kls|pai\s*k13|pai|paibp|fikih|fiqih|ushul\s*fiq[ih]*|a[kq]idah\s*akhlak|al[-\s]*qur'?an\s*hadit?s?t?|qh|ski|sejarah\s+kebudayaan\s+islam|bahasa\s+arab|bahasa\s+indonesia|bahasa\s+inggris|pendidikan\s+pancasila|ppkn|pkn|ipas?|ips|matematika|mtk|informatika|pjok|penjaskes|seni\s+budaya|prakarya|fisika|biologi|kimia|ekonomi|geografi|sosiologi)\s*(?:sd|mi|smp|mts|sma|ma|smk|kelas|kls)?\s*(\d{1,2})\b.*?\bbab\s*(\d{1,2})\b",
         base,
         flags=re.IGNORECASE,
     )
@@ -180,39 +750,79 @@ def parse_textbook_metadata(filename: str) -> Dict[str, Any]:
         kelas_num = int(m_kb.group(1))
         bab_num = int(m_kb.group(2))
     else:
-        m_k = re.search(r"\b(?:kelas|kls|pai|paibp|fikih|fiqih|ski|ipas?)\s*(\d{1,2})\b", base, flags=re.IGNORECASE)
+        m_k = re.search(
+            r"\b(?:kelas|kls|pai\s*k13|pai|paibp|fikih|fiqih|a[kq]idah\s*akhlak|al[-\s]*qur'?an\s*hadit?s?t?|ski|bahasa\s+arab|bahasa\s+indonesia|bahasa\s+inggris|pendidikan\s+pancasila|ppkn|ipas?|ips|matematika|mtk|informatika|pjok|fisika|biologi|kimia|ekonomi|geografi|sosiologi)\s*(?:sd|mi|smp|mts|sma|ma|smk|kelas|kls)?\s*(\d{1,2})\b",
+            base,
+            flags=re.IGNORECASE,
+        )
         if m_k:
             kelas_num = int(m_k.group(1))
         m_b = re.search(r"\bbab\s*(\d{1,2})\b", base, flags=re.IGNORECASE)
         if m_b:
             bab_num = int(m_b.group(1))
 
-    # Jika nama file diawali "<Mapel> <Kelas> Bab <Bab>" tapi belum masuk daftar baku (misal: "Tarikh 5 Bab 1")
     if not subject_code:
-        m_generic = re.match(r"^([A-Za-z\s\-']+?)\s+(\d{1,2})\s*[-\.]*\s*Bab\s*(\d{1,2})\b", base, flags=re.IGNORECASE)
-        if m_generic:
+        m_generic = re.match(
+            r"^([A-Za-z\s\-']+?)\s+(?:Kelas\s+)?(\d{1,2})\s*(?:SD|MI|SMP|MTs|SMA|MA|SMK)?\s*[-\.]*\s*Bab\s*(\d{1,2})\b",
+            base,
+            flags=re.IGNORECASE,
+        )
+        if m_generic and "bagian" not in m_generic.group(1).lower() and "kitab" not in m_generic.group(1).lower():
             subject_code = m_generic.group(1).strip().title()
             subject_full = subject_code
             kelas_num = int(m_generic.group(2))
             bab_num = int(m_generic.group(3))
 
-    # Bersihkan topik dari awalan "PAI 6 Bab 9 - " dsb.
-    clean_topic = re.sub(
-        r"^.*?\bbab\s*\d{1,2}\s*[\.\-:|I]*\s*",
-        "",
-        base,
-         count=1,
-        flags=re.IGNORECASE,
-    ).strip()
+    # Deteksi jenjang Madrasah / Sekolah pada nama file sebelum kata "Bab"
+    header_part = re.split(r"\bbab\s*\d{1,2}\b", base, maxsplit=1, flags=re.IGNORECASE)[0]
+    jenjang_full = ""
+    if re.search(r"\b(?:MI|Madrasah\s+Ibtidaiyah)\b", header_part, flags=re.IGNORECASE):
+        jenjang_full = "Madrasah Ibtidaiyah"
+    elif re.search(r"\b(?:MTs|Madrasah\s+Tsanawiyah)\b", header_part, flags=re.IGNORECASE):
+        jenjang_full = "Madrasah Tsanawiyah"
+    elif re.search(r"\b(?:MA|Madrasah\s+Aliyah)\b", header_part, flags=re.IGNORECASE):
+        jenjang_full = "Madrasah Aliyah"
+
+    # Ekstrak topik yang tertulis setelah "Bab <N>" pada nama file
+    has_filename_topic = False
+    clean_topic = ""
+    if re.search(r"\bbab\s*\d{1,2}\b", base, flags=re.IGNORECASE):
+        after_bab = re.sub(
+            r"^.*?\bbab\s*\d{1,2}\s*[\.\-:|I]*\s*",
+            "",
+            base,
+            count=1,
+            flags=re.IGNORECASE,
+        ).strip()
+        # Bersihkan jika setelah Bab masih ada sisa akhiran "I Mapel..."
+        after_bab = re.sub(r"\s+I\s+(?:PAI|PAIBP|Fikih|Akidah|Al-Qur'?an|SKI).*$", "", after_bab, flags=re.IGNORECASE).strip()
+        if after_bab and len(after_bab) >= 3:
+            clean_topic = after_bab
+            has_filename_topic = True
+
+    if not clean_topic and subject_code and kelas_num and bab_num:
+        lookup_subj = "Al-Quran Hadis" if "qur" in subject_code.lower() else subject_code
+        if (lookup_subj, kelas_num, bab_num) in KNOWN_TEXTBOOK_CHAPTER_TOPICS:
+            clean_topic = KNOWN_TEXTBOOK_CHAPTER_TOPICS[(lookup_subj, kelas_num, bab_num)]
+            has_filename_topic = True
+
     if not clean_topic:
         clean_topic = base
 
-    # Susun akhiran judul seragam: "I PAIBP 5 I Bab 1" atau "I Fikih 5 I Bab 1"
+    # Susun akhiran judul seragam sesuai contoh pengguna:
+    # - Jika ada MI/MTs/MA: "I Al-Quran Hadis 12 Madrasah Aliyah I Bab 7"
+    # - Jika tanpa MI/MTs/MA: "I PAI K13 Kelas 1 I Bab 2" atau "I PAI Kelas 6 I Bab 9"
     if subject_code and kelas_num and bab_num:
-        uniform_suffix = f"I {subject_code} {kelas_num} I Bab {bab_num}"
+        if jenjang_full:
+            uniform_suffix = f"I {subject_code} {kelas_num} {jenjang_full} I Bab {bab_num}"
+        else:
+            uniform_suffix = f"I {subject_code} Kelas {kelas_num} I Bab {bab_num}"
         badge_text = f"{subject_code.upper()} {kelas_num} • BAB {bab_num}"
     elif subject_code and kelas_num:
-        uniform_suffix = f"I {subject_code} {kelas_num}"
+        if jenjang_full:
+            uniform_suffix = f"I {subject_code} {kelas_num} {jenjang_full}"
+        else:
+            uniform_suffix = f"I {subject_code} Kelas {kelas_num}"
         badge_text = f"{subject_code.upper()} KELAS {kelas_num}"
     elif subject_code and bab_num:
         uniform_suffix = f"I {subject_code} I Bab {bab_num}"
@@ -225,39 +835,82 @@ def parse_textbook_metadata(filename: str) -> Dict[str, Any]:
         "subject_code": subject_code,
         "subject_full": subject_full,
         "kelas": kelas_num,
+        "jenjang_full": jenjang_full,
         "bab": bab_num,
         "clean_topic": clean_topic,
+        "has_filename_topic": has_filename_topic,
         "uniform_suffix": uniform_suffix,
         "badge_text": badge_text,
     }
 
 
-def format_uniform_youtube_title(raw_title: str, filename: str) -> str:
+def has_uniform_textbook_suffix(title: str) -> bool:
+    """Mengecek apakah judul video sudah memiliki akhiran standar `I <Mapel> <Kelas/Jenjang> I Bab <N>`."""
+    return bool(
+        re.search(
+            r"\bI\s+[A-Za-z0-9\s'\-]+?(?:Kelas\s+\d{1,2}|\d{1,2}\s+Madrasah\s+(?:Ibtidaiyah|Tsanawiyah|Aliyah))\s+I\s+Bab\s+\d{1,2}\s*(?:#Shorts)?\s*$",
+            title.strip(),
+        )
+    )
+
+
+def format_uniform_youtube_title(raw_title: str, filename: str, is_shorts: bool = False) -> str:
     """
-    Memastikan Judul YouTube diakhiri secara seragam dengan format:
-    `<Judul Materi> I PAIBP 5 I Bab 1` atau `<Judul Materi> I Fikih 5 I Bab 1`
-    dan panjang total <= 100 karakter (tanpa memotong akhiran).
+    Memastikan Judul YouTube mematuhi aturan penamaan resmi channel Islamic K1:
+    1. Jika video Kajian Kitab -> `Bagian Ke (N) - Kitab (X), Bab (Y) - Fashal (Z)`
+    2. Jika video Materi Pelajaran (PAI/PAIBP, PAI K13, Al-Quran Hadis, Akidah Akhlak, Fikih, SKI, Bahasa Indonesia, IPAS, Matematika, dll.)
+       -> Menggunakan judul topik yang diberikan pada nama file ketika diupload:
+          * Contoh 1: `Al-Quran Hadis 12 MA Bab 7. Jujur dan Adil Itu Hebat`
+            -> `Jujur dan Adil Itu Hebat I Al-Quran Hadis 12 Madrasah Aliyah I Bab 7`
+          * Contoh 2: `PAI K13 1 Bab 2. Aku Cinta Al-Qur'an`
+            -> `Aku Cinta Al-Qur'an I PAI K13 Kelas 1 I Bab 2`
     """
+    # 1. Cek apakah video Kajian Kitab
+    kitab_title = format_kitab_youtube_title(raw_title, filename, is_shorts=is_shorts)
+    if kitab_title:
+        return kitab_title
+
+    # 2. Cek apakah merupakan Materi Pelajaran dari filename (atau dari raw_title jika filename tidak lengkap)
     meta = parse_textbook_metadata(filename)
+    if not meta["uniform_suffix"]:
+        meta = parse_textbook_metadata(raw_title)
     suffix = meta["uniform_suffix"]
     if not suffix:
         return raw_title[:100]
 
-    # Bersihkan embel-embel kelas/bab/channel lama di akhir raw_title agar tidak ganda
-    cleaned = raw_title.strip()
-    cleaned = re.sub(r"\s*[\|I]\s*(?:PAI|PAIBP|Islamic\s*K1|Materi\s*PAI).*$", "", cleaned, flags=re.IGNORECASE).strip()
-    cleaned = re.sub(r"[:\-\|]\s*(?:Materi\s*)?(?:PAI|PAIBP)\s*Kelas\s*\d+.*$", "", cleaned, flags=re.IGNORECASE).strip()
-    cleaned = re.sub(r"\s*\((?:PAI|PAIBP)\s*Kelas\s*\d+.*?\)\s*$", "", cleaned, flags=re.IGNORECASE).strip()
-    cleaned = re.sub(r"^PAI\s*(?:Kelas\s*)?\d+\s*Bab\s*\d+\s*[:\-\.]\s*", "", cleaned, flags=re.IGNORECASE).strip()
+    has_shorts_tag = is_shorts or ("#shorts" in raw_title.lower())
 
-    if not cleaned or len(cleaned) < 5:
-        cleaned = meta["clean_topic"]
+    # Sesuai instruksi Poin 7: Gunakan langsung judul topik dari nama file yang diberikan pengguna saat diupload!
+    if meta.get("has_filename_topic") and meta.get("clean_topic"):
+        cleaned = meta["clean_topic"].strip()
+    else:
+        cleaned = re.sub(r"\s*#shorts\b.*$", "", raw_title.strip(), flags=re.IGNORECASE).strip()
+        cleaned = re.sub(
+            r"\s*[\|I]\s*(?:PAI|PAIBP|Fikih|Fiqih|Akidah\s*Akhlak|Al[-\s]*Qur'?an\s*Hadit?s?t?|SKI|Bahasa\s*Arab|Bahasa\s*Indonesia|IPAS?|Matematika|Islamic\s*K1|Materi\s*PAI|Kajian\s*&\s*Mater).*$",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        cleaned = re.sub(
+            r"^(?:PAI\s*K13|PAI|PAIBP|Fikih|Fiqih|Akidah\s*Akhlak|Al[-\s]*Qur'?an\s*Hadit?s?t?|SKI)\s*(?:Kelas\s*)?\d+\s*(?:SD|MI|SMP|MTs|SMA|MA)?\s*Bab\s*\d+\s*[:\-\.]\s*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        if not cleaned or len(cleaned) < 4:
+            cleaned = meta["clean_topic"].strip()
 
-    max_topic_len = 100 - len(suffix) - 1
+    full_suffix = f"{suffix} #Shorts" if has_shorts_tag else suffix
+    max_topic_len = 100 - len(full_suffix) - 1
     if len(cleaned) > max_topic_len:
-        cleaned = cleaned[: max_topic_len - 1].rsplit(" ", 1)[0].rstrip(":,-|")
+        # Jika topik memiliki penjelasan tambahan dalam kurung (...), ringkas bagian kurungnya terlebih dahulu
+        no_paren = re.sub(r"\s*\([^)]*\)\s*", " ", cleaned).strip()
+        if len(no_paren) >= 8 and len(no_paren) <= max_topic_len:
+            cleaned = no_paren
+        else:
+            cleaned = cleaned[:max_topic_len].rsplit(" ", 1)[0].rstrip(":,-|(")
 
-    return f"{cleaned} {suffix}"
+    return f"{cleaned} {full_suffix}"
 
 
 def _download_pdf_cover_from_drive(drive, pdf_file_id: str, dest_path: str) -> bool:
@@ -454,15 +1107,21 @@ def get_book_cover_image(drive, assets_folder_id: str, filename: str, work_dir: 
 
 def determine_target_playlist_titles(filename: str, fallback_ai_playlist: str = "Kajian Keluarga Muslim") -> List[str]:
     """
-    Menentukan nama-nama Playlist yang tepat untuk sebuah video berdasarkan Mata Pelajaran & Kelasnya:
+    Menentukan nama-nama Playlist yang tepat untuk sebuah video berdasarkan Mata Pelajaran, Kelas, atau Kajian Kitabnya:
+    - Untuk Kajian Kitab (misal Bidayatul Hidayah, Fathul Qarib, Ahkamith Thaharah, Riyadhus Shalihin, dll.):
+      ["Kajian Kitab <Nama Kitab>"]
     - Untuk PAIBP Kelas 1-6: ["PAI SD Kelas X (K13 & Merdeka)", "PAI SD Kelas X"]
     - Untuk PAIBP Kelas 7-9: ["PAI SMP Kelas X (K13 & Merdeka)", "PAI SMP Kelas X"]
     - Untuk PAIBP Kelas 10-12: ["PAI SMA Kelas X (K13 & Merdeka)"]
-    - Untuk Mapel buku lain berkelas (misal Fikih 5, Akidah Akhlak 7, SKI 8, Bahasa Arab 6):
+    - Untuk Mapel buku lain berkelas (misal Fikih 5, Akidah Akhlak 7, SKI 8, Bahasa Arab 6, Bahasa Indonesia 4, IPAS 5, Matematika 6):
       ["<Mapel> Kelas <Kelas> (K13 & Merdeka)"]
-    - Untuk Mapel/Kitab tanpa kelas (misal Ushul Fiqh, Ilmu Mawaris, dll.):
-      ["Materi <Mapel>"]
+    - Untuk Mapel tanpa kelas (misal Ushul Fiqh, Ilmu Mawaris, dll.):
+      ["Kajian & Materi <Mapel>"]
     """
+    kmeta = parse_kitab_metadata(filename)
+    if kmeta and kmeta.get("kitab"):
+        return [f"Kajian Kitab {kmeta['kitab']}"]
+
     meta = parse_textbook_metadata(filename)
     subject_code = meta["subject_code"]
     kelas = meta["kelas"]
