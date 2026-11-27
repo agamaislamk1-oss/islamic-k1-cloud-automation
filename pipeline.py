@@ -1149,16 +1149,11 @@ def process_google_form_explainer_queue(
     existing_yt_videos: List[Dict[str, str]],
 ) -> Tuple[int, Optional[str], bool]:
     """
-    Memproses antrian pembuatan Video Motion Grafis Explainer 3 Menit dari Google Form SATU PER SATU,
-    menggunakan database riwayat & jadwal tayang yang SAMA dengan pipeline NotebookLM agar 100% ANTI-BENTROK.
-    Mengembalikan (jumlah_video_form_diproses, history_file_id_terbaru, kuota_youtube_habis).
+    [DINONAKTIFKAN PERMANEN SESUAI INSTRUKSI PENGGUNA]
+    Pembuatan dan pengunggahan video dari Google Form Motion Grafis telah dihentikan sepenuhnya.
     """
-    youtube, drive = get_google_services()
-    sync_google_form_status_to_sheet(drive, root_id, form_queue_id, history_data)
-    pending_requests = fetch_pending_google_form_requests(drive, root_id, form_queue_id)
-    if not pending_requests:
-        print("[GOOGLE FORM] Tidak ada antrian baru dari Google Form Motion Grafis.")
-        return 0, history_file_id, False
+    print("[GOOGLE FORM] Pembuatan & upload video dari Google Form telah DIHENTIKAN PERMANEN.")
+    return 0, history_file_id, False
 
     print(f"[GOOGLE FORM] Ditemukan {len(pending_requests)} entri dari Google Form. Memeriksa status anti-duplikat...")
     processed_form_count = 0
@@ -2248,20 +2243,9 @@ def run_queue_pipeline():
         print(f"[SELESAI SESI] Kuota harian YouTube tercapai. Total Gambar Shorts diproses: {img_processed}")
         return
 
-    # 3. PRIORITAS UTAMA #1: Proses antrian Google Form Motion Grafis Explainer 3 Menit (Islami & Umum)
-    form_processed, history_file_id, quota_hit = process_google_form_explainer_queue(
-        gemini_api_key=gemini_api_key,
-        root_id=root_id,
-        assets_id=assets_id,
-        form_queue_id=form_queue_id,
-        done_id=done_id,
-        history_data=history_data,
-        history_file_id=history_file_id,
-        existing_yt_videos=existing_yt_videos,
-    )
-    if quota_hit:
-        print(f"[SELESAI SESI] Kuota harian YouTube tercapai. Total video Google Form diproses: {form_processed}")
-        return
+    # 3. NONAKTIFKAN PEMBUATAN VIDEO DARI GOOGLE FORM (Sesuai Instruksi Tegas Pengguna: Hentikan pembuatan/upload video dari Google Form)
+    form_processed = 0
+    print("[GOOGLE FORM] Pembuatan & upload video dari Google Form telah DIHENTIKAN PERMANEN sesuai instruksi pengguna.")
 
     processed_count = img_aud_processed + img_processed + form_processed
 
